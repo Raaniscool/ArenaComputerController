@@ -20,9 +20,16 @@ class ControllerHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], controller: ComputerController, token: str | None = None):
+    def __init__(
+        self,
+        address: tuple[str, int],
+        controller: ComputerController,
+        token: str | None = None,
+        blender_adapter: Any | None = None,
+    ):
         self.controller = controller
         self.token = token
+        self.blender_adapter = blender_adapter
         super().__init__(address, ControllerRequestHandler)
 
 
@@ -31,6 +38,7 @@ def create_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     token: str | None = None,
+    blender_adapter: Any | None = None,
 ) -> ControllerHTTPServer:
     try:
         loopback = host.casefold() == "localhost" or ipaddress.ip_address(host).is_loopback
@@ -38,7 +46,7 @@ def create_server(
         loopback = False
     if not loopback and not token:
         raise ValueError("Non-loopback controller binds require a bearer token.")
-    return ControllerHTTPServer((host, port), controller, token)
+    return ControllerHTTPServer((host, port), controller, token, blender_adapter)
 
 
 class ControllerRequestHandler(BaseHTTPRequestHandler):
@@ -77,6 +85,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if path == "/v1/screenshot":
                 self._handle_screenshot(query)
                 return
+            parts = path.split("/")
+            if (
+                len(parts) == 7
+                and parts[:5] == ["", "v1", "integrations", "blender", "jobs"]
+                and parts[6] == "screenshot"
+            ):
+                self._handle_blender_screenshot(parts[5])
+                return
             self._send_json(404, self._error("not_found", "Unknown API endpoint."))
         except ControllerError as exc:
             self._send_json(exc.status, self._error(exc.code, exc.message))
@@ -96,11 +112,54 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if path == "/v1/refresh":
                 self._send_json(200, self.server.controller.refresh())
                 return
+            if path == "/v1/integrations/blender/probe":
+                adapter = self._require_blender_adapter()
+                result = adapter.probe(timeout=body.get("timeout", 5.0))
+                status = 504 if result.get("job", {}).get("status") == "timeout" else 200
+                self._send_json(status, result)
+                return
+            if path == "/v1/integrations/blender/commands":
+                adapter = self._require_blender_adapter()
+                response = adapter.execute(
+                    body.get("operation"),
+                    body.get("parameters"),
+                    timeout=body.get("timeout", 60.0),
+                    request_id=body.get("request_id"),
+                )
+                status = 504 if response.get("status") == "timeout" else 200
+                self._send_json(status, response)
+                return
             self._send_json(404, self._error("not_found", "Unknown API endpoint."))
         except ControllerError as exc:
             self._send_json(exc.status, self._error(exc.code, exc.message))
         except Exception:
             self._send_json(500, self._error("internal_error", "Internal controller error."))
+
+    def _require_blender_adapter(self) -> Any:
+        adapter = self.server.blender_adapter
+        if adapter is None:
+            raise ControllerError(
+                "Blender integration is not configured. Set ARENA_BLENDER_WORKSHOP_PATH and restart the controller.",
+                "blender_integration_not_configured",
+                503,
+            )
+        return adapter
+
+    def _handle_blender_screenshot(self, job_id: str) -> None:
+        data, metadata = self._require_blender_adapter().read_screenshot(job_id)
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Blender-Job-Id", metadata["job_id"])
+        self.send_header("X-Blender-Capture-Type", "camera_render")
+        self.send_header("X-Image-Width", str(metadata.get("width", "")))
+        self.send_header("X-Image-Height", str(metadata.get("height", "")))
+        self.send_header("X-Image-Bytes", str(metadata["bytes"]))
+        self.send_header("X-Image-SHA256", metadata["sha256"])
+        self.end_headers()
+        self.wfile.write(data)
 
     def _handle_screenshot(self, query: dict[str, list[str]]) -> None:
         image_format = self._query_one(query, "format", "png").lower()

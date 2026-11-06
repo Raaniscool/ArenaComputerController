@@ -4,13 +4,13 @@ A small, local-first Windows desktop-control prototype. It exposes a provider-ne
 
 ## Repository assessment
 
-At the start of this work the checkout contained only this README and the initial commit. **Neither `ArenaBlenderWorkshop` nor `ArenaRobloxConnector` has been added to this repository yet.** There is no existing controller, connector source, setup guide, or license text to reuse or inspect. I have therefore left both integrations untouched rather than duplicating or relicensing code. The controller reports Blender/Roblox process detection separately from a real integration connection.
+The current branch already contains an earlier connector commit with ArenaBlenderWorkshop files and a Roblox Studio plugin/server. Those pre-existing files are preserved untouched in this task; no new connector source was copied, and no Roblox-to-controller work is being started. A read-only audit of ArenaBlenderWorkshop commit `6674261b39d9070b93e990276149b14d99b8ee7e` informed the Blender adapter below. That source has no declared license, so this adapter loads it from a separately configured checkout via `ARENA_BLENDER_WORKSHOP_PATH` rather than depending on the copy in this repository. The controller reports Blender/Roblox process detection separately from add-on responsiveness.
 
-The shortest useful path available in this checkout is a thin Windows API with native window/process discovery, optional UI Automation and screenshot dependencies, stale-input protection, action results, and a reproducible image-encoding benchmark. The first end-to-end Blender workflow remains blocked on the Blender connector files being added.
+The controller remains a thin Windows API with native window/process discovery, optional UI Automation and screenshot dependencies, stale-input protection, action results, a reproducible image-encoding benchmark, and a Blender-only adapter that reuses ArenaBlenderWorkshop's existing file mailbox.
 
 ## Prototype status and scope
 
-Implemented in this first pass:
+Implemented:
 
 - Starts a local HTTP API and prints a startup report based on the host's detected processes/windows.
 - On Windows, enumerates visible top-level windows, identifies the foreground window, and lists processes without reading command-line arguments or application documents.
@@ -19,9 +19,10 @@ Implemented in this first pass:
 - Supports UIA click/focus/type/clear/key actions, window focus/key actions, and coordinate click/scroll fallback actions.
 - Returns action success/error, a basic window/application state delta, and a bounded action history. Typed text and key sequences are deliberately not stored in history.
 - Captures a full desktop, visible window bounds, or a crop only when `/v1/screenshot` is requested. PNG, JPEG, and WebP are supported when Pillow's encoder is available; scale-down is supported.
-- Keeps the API and core tests dependency-free. Windows automation/image libraries are optional extras.
+- Provides an opt-in Blender adapter that imports the existing external connector's validated job builder, allowlist, mailbox, and result waiter. It probes with `hello_test`, bounds waits, keeps structured failures, deduplicates retries that use the same `request_id`, and returns camera-render PNG bytes directly from the controller.
+- Keeps the API and tests dependency-free. Windows automation/image libraries are optional extras; the Blender adapter uses only the connector checkout plus the Python standard library.
 
-Not yet implemented: the imported Blender/Roblox adapters, application-specific verification, event-driven live updates, automatic input-map diffing, multi-provider AI adapters, a dashboard, and AI-provider latency/token measurements. This is a working foundation, not a claim that those later milestones are complete.
+Not implemented in this task: integration between this computer controller and the existing Roblox Studio connector, event-driven live updates, automatic input-map diffing, multi-provider AI adapters, a dashboard, and AI-provider latency/token measurements. The Blender adapter has simulated test coverage, but live Windows/Blender 5.2 verification remains a separate required check.
 
 ## Run on Windows
 
@@ -53,7 +54,20 @@ python -m arena_computer_controller
 
 All API routes except `/health` then require `Authorization: Bearer <token>`. Prefer loopback unless a remote client genuinely needs access. The server does not enable CORS.
 
-On non-Windows hosts the service can still be started and tested, but it reports process-only discovery; window/input actions and screenshots are Windows-only in this prototype.
+On non-Windows hosts the service can still be started and tested, but it reports process-only discovery; window/input actions and desktop screenshots are Windows-only in this prototype.
+
+### Configure the existing Blender connector (Windows)
+
+The controller does not copy or install ArenaBlenderWorkshop. Set the path to the **root of its separately checked-out repository** (the folder containing `arena_workshop\__init__.py`) before starting the controller:
+
+```powershell
+$env:ARENA_BLENDER_WORKSHOP_PATH = Join-Path $HOME "Documents\ArenaBlenderWorkshop"
+python -m arena_computer_controller
+```
+
+Replace that path if the checkout is elsewhere. Run the controller and Blender 5.2 as the same Windows user/session so both use `%LOCALAPPDATA%\ArenaBlenderWorkshop\queue`. Open Blender with the existing ArenaBlenderWorkshop add-on enabled. The connector's existing initialization can remove the default cube; use a disposable scene and remember it does not automatically save the `.blend` file. No Google Drive setup is used or required by this adapter.
+
+The connector's bounded protocol allowlist is reused as-is: `hello_test`, `create_test_object`, `create_primitive`, `move_object`, `rotate_object`, `scale_object`, `rename_object`, `create_material`, `capture_screenshot`, `duplicate_object`, `delete_object`, and `set_dimensions`. Arbitrary Python or unlisted operations cannot be submitted. The adapter waits at most 540 seconds (60 seconds by default; 5 seconds for a probe). A timeout returns the job ID and does not re-enqueue; repeat the same intent with the same `request_id` to safely check/retrieve it. Reusing an ID with different command data is rejected.
 
 ## API
 
@@ -103,6 +117,50 @@ GET /v1/screenshot?x=100&y=100&width=800&height=600&format=webp
 
 Window capture means cropping the window's **currently visible screen bounds**; it does not capture obscured/off-screen window contents. A crop uses absolute desktop coordinates. The controller does not transmit a screenshot automatically after an action.
 
+### Blender add-on probe, modeling commands, and camera render
+
+`GET /v1/state` reports whether a Blender process is detected. Detection is not proof that the add-on is responding; probe it with the harmless `hello_test` mailbox job:
+
+```powershell
+$base = "http://127.0.0.1:8765"
+Invoke-RestMethod -Method Post -Uri "$base/v1/integrations/blender/probe" `
+  -ContentType "application/json" -Body '{"timeout":8}'
+```
+
+Submit only allowlisted, schema-validated operations through the separate Blender integration route (not generic `/v1/actions`):
+
+```powershell
+$command = @{
+  operation = "create_primitive"
+  parameters = @{ primitive_type = "cube"; object_name = "ArenaDemoCube"; location = @(0, 0, 0) }
+  timeout = 30
+  request_id = [guid]::NewGuid().ToString()
+} | ConvertTo-Json -Depth 6
+$result = Invoke-RestMethod -Method Post -Uri "$base/v1/integrations/blender/commands" `
+  -ContentType "application/json" -Body $command
+$result | ConvertTo-Json -Depth 10
+```
+
+The structured response includes `job_id`, operation `status`, operation `result`, `error`, and `duplicate_request`. A completed operation returns its connector result; an add-on failure remains a structured `failed` response. A queued-job timeout returns HTTP 504 plus the job ID. Use the same `request_id` and same command to retry safely; a different payload with that ID returns HTTP 409. The controller persists a retry record before enqueue in a `controller_requests` directory alongside the existing mailbox, and never silently enqueues a second copy of the same identified action. If a retry record survives but all mailbox state has disappeared, it returns an ambiguity error rather than risking a replay; inspect Blender before deliberately resubmitting with a new ID.
+
+Request a **camera render** from Blender's active camera/current render engine, then fetch the PNG bytes directly from the controller:
+
+```powershell
+$render = @{
+  operation = "capture_screenshot"
+  parameters = @{ width = 640; height = 480 }
+  timeout = 120
+  request_id = [guid]::NewGuid().ToString()
+} | ConvertTo-Json -Depth 6
+$renderResult = Invoke-RestMethod -Method Post -Uri "$base/v1/integrations/blender/commands" `
+  -ContentType "application/json" -Body $render
+$renderResult.result
+Invoke-WebRequest -Uri ($base + $renderResult.result.screenshot_url) `
+  -OutFile (Join-Path $PWD "blender-camera-render.png")
+```
+
+This PNG is a **Blender camera render**, not a screenshot of Blender's UI or viewport; UI screenshots remain the separate `/v1/screenshot` endpoint and are Windows-only. The render needs an active camera and may use the current scene/render-engine settings. The adapter confines image reads to the job's mailbox screenshot directory, checks the PNG signature/hash, and caps downloads at 20 MiB. It serves the file directly; Google Drive is not involved.
+
 ## Screenshot benchmark
 
 The benchmark accepts a representative screenshot file and optionally a previous screenshot:
@@ -116,10 +174,79 @@ It compares MSS and Pillow ImageGrab capture time when run with `--capture`, the
 
 ## Tests
 
-The API/controller tests run on any Python 3.10+ host without installing Windows extras:
+The controller and adapter tests run on any Python 3.10+ host without installing Windows extras:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-The current sandbox is Linux, so Windows UI Automation, mouse/keyboard dispatch, and physical screenshot capture cannot be exercised here. Those require a real Windows desktop session. Tests use a fake backend only for controller/API contracts; they do not substitute for that Windows validation.
+The Blender adapter tests use an independent fake connector/mailbox. They cover allowlist errors, structured add-on failures, bounded timeouts, idempotent retries, screenshot path/integrity checks, and the direct PNG HTTP route. They do not run Blender or the Windows add-on. The current sandbox is Linux, so Windows UI Automation, mouse/keyboard dispatch, live application detection, and physical screenshots cannot be exercised here.
+
+### Exact live Windows / Blender 5.2 verification
+
+Run this on the Windows machine with Blender 5.2 and the existing add-on installed/enabled. Use the same signed-in Windows account for Blender and the controller; confirm the checkout path if yours differs from the example.
+
+1. In PowerShell, from the controller checkout:
+
+   ```powershell
+   py -3 -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   python -m pip install -e ".[windows]"
+   $env:ARENA_BLENDER_WORKSHOP_PATH = Join-Path $HOME "Documents\ArenaBlenderWorkshop"
+   $env:ARENA_CONTROLLER_HOST = "127.0.0.1"
+   $env:ARENA_CONTROLLER_PORT = "8765"
+   python -m arena_computer_controller
+   ```
+
+2. Open Blender 5.2 in that same user session and enable the existing ArenaBlenderWorkshop add-on. Use a disposable scene: the connector's initialization can remove the default cube, and this prototype does not save the `.blend` file. Keep an active camera in the scene.
+
+3. In a second PowerShell window, confirm process detection and that the add-on answers `hello_test`:
+
+   ```powershell
+   $base = "http://127.0.0.1:8765"
+   (Invoke-RestMethod "$base/v1/state").integrations | Format-Table
+   Invoke-RestMethod -Method Post -Uri "$base/v1/integrations/blender/probe" `
+     -ContentType "application/json" -Body '{"timeout":10}'
+   ```
+
+   The Blender integration row should have `application_detected = true`; the probe should report `addon_responding = true`, `healthy = true`, and Blender version `5.2.x`.
+
+4. Send one supported modeling command and verify its structured result (no UI automation or generic desktop action is involved):
+
+   ```powershell
+   $command = @{
+     operation = "create_primitive"
+     parameters = @{ primitive_type = "cube"; object_name = "ArenaVerificationCube"; location = @(0, 0, 0) }
+     timeout = 30
+     request_id = [guid]::NewGuid().ToString()
+   } | ConvertTo-Json -Depth 6
+   $created = Invoke-RestMethod -Method Post -Uri "$base/v1/integrations/blender/commands" `
+     -ContentType "application/json" -Body $command
+   $created | ConvertTo-Json -Depth 10
+   if ($created.status -ne "completed" -or -not $created.result.created -or
+       $created.result.object_name -ne "ArenaVerificationCube") { throw "Blender command verification failed" }
+   ```
+
+5. Request and download the **camera render** directly from the controller, then check its reported dimensions, PNG signature, and downloaded file size:
+
+   ```powershell
+   $renderRequest = @{
+     operation = "capture_screenshot"
+     parameters = @{ width = 640; height = 480 }
+     timeout = 120
+     request_id = [guid]::NewGuid().ToString()
+   } | ConvertTo-Json -Depth 6
+   $render = Invoke-RestMethod -Method Post -Uri "$base/v1/integrations/blender/commands" `
+     -ContentType "application/json" -Body $renderRequest
+   if ($render.status -ne "completed" -or -not $render.result.screenshot_available) { throw "Render failed" }
+   $render.result | Select-Object width, height, render_engine, camera_name
+   $pngPath = Join-Path $PWD "blender-camera-render.png"
+   Invoke-WebRequest -Uri ($base + $render.result.screenshot_url) -OutFile $pngPath
+   $png = [System.IO.File]::ReadAllBytes($pngPath)
+   [BitConverter]::ToString($png, 0, 8) # expected 89-50-4E-47-0D-0A-1A-0A
+   Get-Item $pngPath | Select-Object Name, Length
+   ```
+
+   This is a Blender **camera render**, not a UI/viewport screenshot. It is retrieved as PNG bytes from the controller endpoint; no Google Drive account or upload is involved. Do not save the test scene unless desired.
+
+Live verification is not claimed until those Windows steps are performed. The sandbox run covers simulated API/mailbox behavior only.

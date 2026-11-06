@@ -10,6 +10,7 @@ import sys
 from . import __version__
 from .backend import SystemDesktopBackend
 from .controller import ComputerController
+from .integrations.blender import BlenderMailboxAdapter
 from .server import create_server
 
 
@@ -88,11 +89,26 @@ def main(argv: list[str] | None = None) -> int:
         report = {"state": {}, "input_map": {"count": 0, "source": "unavailable", "warnings": []}, "capabilities": backend.capabilities()}
 
     print(_format_startup_report(report), flush=True)
-    server = create_server(controller, args.host, args.port, token)
+    blender_adapter = None
+    connector_root = os.environ.get("ARENA_BLENDER_WORKSHOP_PATH")
+    if connector_root:
+        try:
+            blender_adapter = BlenderMailboxAdapter(connector_root)
+            print(f"Blender mailbox adapter: configured from {connector_root}", flush=True)
+        except Exception as exc:
+            print(f"Blender mailbox adapter: unavailable ({type(exc).__name__})", file=sys.stderr, flush=True)
+    else:
+        print("Blender mailbox adapter: not configured (set ARENA_BLENDER_WORKSHOP_PATH)", flush=True)
+    server = create_server(controller, args.host, args.port, token, blender_adapter=blender_adapter)
     actual_host, actual_port = server.server_address[:2]
     auth_note = "bearer token enabled" if token else "loopback only; no bearer token configured"
     print(f"Controller API listening at http://{actual_host}:{actual_port} ({auth_note}).", flush=True)
-    print("Endpoints: GET /health, /v1/state, /v1/inputs, /v1/screenshot; POST /v1/actions, /v1/refresh", flush=True)
+    print(
+        "Endpoints: GET /health, /v1/state, /v1/inputs, /v1/screenshot; "
+        "POST /v1/actions, /v1/refresh, /v1/integrations/blender/probe, "
+        "/v1/integrations/blender/commands; GET /v1/integrations/blender/jobs/{job_id}/screenshot",
+        flush=True,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
