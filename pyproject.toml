@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arena-computer-controller"
+version = "0.1.0"
+description = "A small, local-first Windows desktop control API for Arena and other agents."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "ArenaComputerController contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+windows = [
+  "pywinauto>=0.6.8",
+  "mss>=9.0",
+  "Pillow>=10.0",
+  "psutil>=5.9",
+  "pyautogui>=0.9.54",
+]
+benchmark = ["Pillow>=10.0", "mss>=9.0"]
+
+[project.scripts]
+arena-computer-controller = "arena_computer_controller.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
