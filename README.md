@@ -20,9 +20,10 @@ Implemented:
 - Returns action success/error, a basic window/application state delta, and a bounded action history. Typed text and key sequences are deliberately not stored in history.
 - Captures a full desktop, visible window bounds, or a crop only when `/v1/screenshot` is requested. PNG, JPEG, and WebP are supported when Pillow's encoder is available; scale-down is supported.
 - Provides an opt-in Blender adapter that imports the existing external connector's validated job builder, allowlist, mailbox, and result waiter. It probes with `hello_test`, bounds waits, keeps structured failures, deduplicates retries that use the same `request_id`, and returns camera-render PNG bytes directly from the controller.
-- Keeps the API and tests dependency-free. Windows automation/image libraries are optional extras; the Blender adapter uses only the connector checkout plus the Python standard library.
+- Keeps the controller API dependency-free. Windows automation/image libraries and the new MCP SDK are optional extras; the MCP process calls only the existing loopback controller API.
+- Provides an optional, stdio-only MCP adapter with bounded state/probe/execute tools and native image-content results. It has no network listener, tunnel, arbitrary Python, or shell tool. The controller and connector remain responsible for validating existing operation schemas.
 
-Not implemented in this task: integration between this computer controller and the existing Roblox Studio connector, event-driven live updates, automatic input-map diffing, multi-provider AI adapters, a dashboard, and AI-provider latency/token measurements. The Blender adapter has simulated test coverage, but live Windows/Blender 5.2 verification remains a separate required check.
+Not implemented in this task: integration between this computer controller and the existing Roblox Studio connector, event-driven live updates, automatic input-map diffing, multi-provider AI adapters, a dashboard, and AI-provider latency/token measurements. The owner reported that the Windows/Blender 5.2 controller integration has passed a live test. Arena process launch and screenshot delivery to the model's visual context remain unverified.
 
 ## Run on Windows
 
@@ -68,6 +69,32 @@ python -m arena_computer_controller
 Replace that path if the checkout is elsewhere. Run the controller and Blender 5.2 as the same Windows user/session so both use `%LOCALAPPDATA%\ArenaBlenderWorkshop\queue`. Open Blender with the existing ArenaBlenderWorkshop add-on enabled. The connector's existing initialization can remove the default cube; use a disposable scene and remember it does not automatically save the `.blend` file. No Google Drive setup is used or required by this adapter.
 
 The connector's bounded protocol allowlist is reused as-is: `hello_test`, `create_test_object`, `create_primitive`, `move_object`, `rotate_object`, `scale_object`, `rename_object`, `create_material`, `capture_screenshot`, `duplicate_object`, `delete_object`, and `set_dimensions`. Arbitrary Python or unlisted operations cannot be submitted. The adapter waits at most 540 seconds (60 seconds by default; 5 seconds for a probe). A timeout returns the job ID and does not re-enqueue; repeat the same intent with the same `request_id` to safely check/retrieve it. Reusing an ID with different command data is rejected.
+
+### Optional stdio MCP adapter
+
+The optional MCP process exposes the existing controller tools to an MCP host over **stdio only**. It opens no network port and will only call `http://localhost` or an IP loopback controller URL. This first version does not provide a tunnel or remote transport.
+
+The MCP SDK currently requires Python 3.11 or later. In the same virtual environment that will run the MCP process:
+
+```powershell
+python --version
+python -m pip install -e ".[mcp]"
+```
+
+To install Windows and MCP extras together in a Python 3.11+ environment, use `python -m pip install -e ".[windows,mcp]"`. The controller itself continues to support Python 3.10+; the MCP extra is intentionally not installed on Python 3.10.
+
+In the Arena MCP host's local-process configuration (if enabled for your account), set the command to the virtual-environment Python, arguments to `-m arena_computer_controller.mcp_server`, and working directory to this repository. For example:
+
+- Command: `C:\Path\To\ArenaComputerController\.venv\Scripts\python.exe`
+- Arguments: `-m`, `arena_computer_controller.mcp_server`
+- Working directory: `C:\Path\To\ArenaComputerController`
+- Environment: `ARENA_CONTROLLER_URL=http://127.0.0.1:8765`; set `ARENA_CONTROLLER_TOKEN` only if the controller was configured with that token.
+
+Use the equivalent fields in the MCP host's own configuration UI; this repository does not assume or document an Arena-specific configuration-file schema. The host must launch and own the stdio process—starting it in a separate terminal does not connect it to Arena. Whether Arena can launch this process on the owner's Windows machine is not yet verified. If local stdio launch is unavailable, stop here; do not expose a controller or substitute a tunnel without explicit approval.
+
+The server registers six tools: `get_computer_state`, `get_active_window`, `get_screenshot`, `blender_probe`, `blender_execute`, and `blender_get_screenshot`. The Blender operation names and parameter shapes remain those listed above; the existing controller and connector perform validation. Each `blender_execute` call requires a unique `request_id`; reuse that same ID unchanged when retrying that operation. To render through MCP, call `blender_execute` with `operation="capture_screenshot"`, a new request ID, and (optionally) `parameters={"width":640,"height":480}`; pass the returned `job_id` to `blender_get_screenshot` to fetch the camera-render PNG. Desktop screenshots default to JPEG quality 90 at 0.75 scale; request PNG for lossless pixels. MCP results include structured metadata and a native image block. Identical image bytes are omitted after the first return to avoid resending large content; pass `force=true` to include the bytes again. The default per-image cap is 8 MiB (`ARENA_MCP_MAX_IMAGE_BYTES` can be set from 1 KiB to 20 MiB).
+
+The controller does not expose a complete Blender scene inventory. Keep track of object names and changes from tool results, and do not infer properties the tools have not returned. The intended Arena acceptance run remains: create two objects, modify one, render and inspect the returned image, make an image-informed change, and render again. Image-block delivery to the model's visual context is not yet verified.
 
 ## API
 
@@ -180,8 +207,15 @@ The controller and adapter tests run on any Python 3.10+ host without installing
 python -m unittest discover -s tests -v
 ```
 
-The Blender adapter tests use an independent fake connector/mailbox. They cover allowlist errors, structured add-on failures, bounded timeouts, idempotent retries, screenshot path/integrity checks, and the direct PNG HTTP route. They do not run Blender or the Windows add-on. The current sandbox is Linux, so Windows UI Automation, mouse/keyboard dispatch, live application detection, and physical screenshots cannot be exercised here.
+MCP bridge validation tests run without the MCP SDK. To also exercise SDK tool registration, native image blocks, and an actual stdio client handshake, install the optional extra in Python 3.11+ and rerun the same suite:
+
+```powershell
+python -m pip install -e ".[mcp]"
+python -m unittest discover -s tests -v
+```
+
+The Blender adapter tests use an independent fake connector/mailbox. They cover allowlist errors, structured add-on failures, bounded timeouts, idempotent retries, screenshot path/integrity checks, and the direct PNG HTTP route. MCP tests use fake controller responses and do not run Blender or Windows desktop APIs. The current sandbox is Linux, so Windows UI Automation, mouse/keyboard dispatch, live application detection, and physical screenshots cannot be exercised here. See [`TESTING.md`](TESTING.md) for the distinction between sandbox test results and owner-reported results, and [`ROADMAP.md`](ROADMAP.md) for outstanding acceptance steps.
 
 ### Live Windows / Blender 5.2 verification
 
-The copy-pasteable, two-terminal procedure—including Python/Windows dependency setup, process detection, `hello_test`, primitive creation and dimension changes, camera rendering, direct PNG retrieval, success checks, and common errors—is in [`docs/windows-blender-controller-test.md`](docs/windows-blender-controller-test.md). It has not been run on a live Windows/Blender machine by this agent; the owner must perform that test before treating the integration as live-verified.
+The copy-pasteable, two-terminal procedure—including Python/Windows dependency setup, process detection, `hello_test`, primitive creation and dimension changes, camera rendering, direct PNG retrieval, success checks, and common errors—is in [`docs/windows-blender-controller-test.md`](docs/windows-blender-controller-test.md). The owner reported a successful Windows/Blender 5.2.0 LTS integration run; this agent did not rerun it. The two-object iterative workflow through Arena MCP, Arena's ability to launch a local stdio process, and image delivery to the model's visual context remain unverified.
