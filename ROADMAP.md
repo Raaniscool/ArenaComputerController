@@ -12,14 +12,14 @@ Build ArenaComputerController into an independent computer-control platform with
 - The Blender adapter reuses the existing connector's operation allowlist/schemas, request-ID idempotency, probe, render, and screenshot retrieval; no add-on schema changes are part of the agent-runtime work.
 - The optional MCP adapter remains stdio-only and uses the loopback controller. It is an interoperability path, not the required reasoning runtime.
 - The repository also contains a separate Node Roblox connector, browser extension, and Studio plugin. They remain intact and are not yet wired into the new agent.
-- The owner reported a successful Windows/Blender 5.2 controller integration run. This is owner-reported, not independently verified in the current sandbox.
+- On 2026-11-05 the owner reported Windows 11 controller verification: `/health` was healthy, UI Automation found 106 controls, and a 403,510-byte PNG screenshot was retrieved and opened. Blender 5.2 integration was previously reported successful. These are owner-reported, not independently rerun in this sandbox.
 
 ## Implemented: first independent runtime slice
 
 - Provider-neutral agent messages, tool specifications, events, results, and `ModelProvider` protocol.
 - Stdlib OpenAI Chat Completions-compatible adapter, defaulting to the Arena Router endpoint/model. It supports function tool calls, actual image bytes as data-URI image content, request timeouts and size limits, HTTPS (or loopback-only HTTP), disabled redirects, and sanitized provider errors.
-- Local CLI (`python -m arena_computer_controller.agent` / `arena-computer-agent`) with environment-based model configuration and no external agent-runtime dependency.
-- Bounded sequential model/tool loop, progress events, call/turn limits, and explicit console approval for `blender_execute`.
+- Local CLI (`python -m arena_computer_controller.agent` / `arena-computer-agent`) with environment-based model configuration and no external agent-runtime dependency. It preflights the loopback `/health` route before any model request to avoid spending API quota when the controller is offline.
+- Bounded sequential model/tool loop, progress events (including image MIME type/byte count), call/turn limits, and explicit console approval for `blender_execute`.
 - Six tools reuse `ControllerMCPBridge`: computer state, active window, desktop screenshot, Blender probe, existing allowlisted Blender execution, and Blender screenshot retrieval.
 - Unit tests cover provider request/tool-call parsing, approval gating, tool dispatch/errors, budgets, and screenshot bytes in the subsequent model request.
 

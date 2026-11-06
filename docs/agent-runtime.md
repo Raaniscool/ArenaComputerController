@@ -15,7 +15,7 @@ Natural-language task
        -> existing Windows controller / Blender mailbox integration
 ```
 
-The independent runtime is a Python CLI (`python -m arena_computer_controller.agent` or the `arena-computer-agent` entry point). It does not require OpenCode, Arena Web Agent Mode, a browser extension, a public endpoint, or an MCP host. The existing optional stdio MCP adapter remains unchanged and available for other local MCP clients.
+The independent runtime is a Python CLI (`python -m arena_computer_controller.agent` or the `arena-computer-agent` entry point). Before its first model request, it checks the local controller's `/health` endpoint, so a controller outage is reported without incurring model usage. It does not require OpenCode, Arena Web Agent Mode, a browser extension, a public endpoint, or an MCP host. The existing optional stdio MCP adapter remains unchanged and available for other local MCP clients.
 
 ## Provider choice
 
@@ -26,7 +26,7 @@ The agent core consumes a provider-neutral `ModelProvider` protocol and normaliz
 ## Tool loop and safety
 
 - A model turn can return text, function calls, or both. The runtime executes registered tools locally and feeds their results back until a final response or configured limit is reached.
-- Tool calls are executed sequentially. The default budget is eight model turns and twelve tool calls per task.
+- Tool calls are executed sequentially. The CLI reports the returned image's MIME type and byte count when it attaches that payload to the next model request. The default budget is eight model turns and twelve tool calls per task.
 - The initial registry reuses the same six operations as the stdio bridge: computer state, active window, desktop screenshot, Blender probe, allowlisted Blender execution, and Blender render screenshot retrieval.
 - `blender_execute` is approval-gated by the CLI. Missing, declined, or failed approval means no operation is sent. The existing Blender connector still validates the operation schema and request ID.
 - Tool exceptions are converted to safe structured failures; raw exception text and API-key values are not added to model messages.

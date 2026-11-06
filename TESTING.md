@@ -15,9 +15,9 @@ Resolved earlier MCP diagnostic: an initial SDK registration check exposed defer
 
 ## Independent agent runtime (current implementation)
 
-- `PYTHONPATH=src:. python -m unittest tests.test_agent_provider tests.test_agent_runtime -v` — 16 agent tests passed.
-- `PYTHONPATH=src:. python -m unittest discover -s tests -q` — 187 total tests passed, with 6 optional MCP SDK tests skipped in the default Python environment.
-- The same full suite using the existing disposable environment with `mcp==2.3.0` — 187 tests passed, no skips.
+- `PYTHONPATH=src:. python -m unittest tests.test_agent_cli tests.test_agent_provider tests.test_agent_runtime -v` — 19 agent tests passed.
+- `PYTHONPATH=src:. python -m unittest discover -s tests -q` — 190 total tests passed, with 6 optional MCP SDK tests skipped in the default Python environment.
+- The same full suite using the existing disposable environment with `mcp==2.3.0` — 190 tests passed, no skips.
 - `npm test` — 31 tests passed.
 - `PYTHONPATH=src:. python -m compileall -q src tests` — passed.
 - `python -m arena_computer_controller.agent --help` — passed without requiring an API key or controller connection.
@@ -30,13 +30,14 @@ Coverage added for the agent:
 - Actual screenshot bytes serialized as a `data:image/png;base64,...` image input (not a file path or URL).
 - API URL restrictions, timeouts/request-response size limits, invalid responses, and safe HTTP-error messages that do not echo the API key or response body.
 - `get_computer_state` followed by `get_screenshot`, image bytes attached to the next model turn, tool error dispatch, and multiple tool-reply ordering.
+- CLI loopback `/health` preflight before any model call (so an offline controller fails without using model quota), plus CLI budget parsing.
 - Blender approval denied by default, explicit approval flow, stable request ID derived from the tool-call ID, tool-call budget, and preserved six-tool surface.
 
 These are unit tests with fake model responses and a fake controller bridge. They do **not** prove a real Arena Router API call, real provider tool calling, real Windows screenshot capture, or model visual understanding. No API key or screenshot data was supplied to the test run.
 
 ## Owner-reported Windows/Blender results (not independently run here)
 
-The owner previously reported a successful run using Windows, Blender 5.2.0 LTS, and the controller endpoint `http://127.0.0.1:8765`, including controller routes, Blender probe/commands, object creation, EEVEE render, image retrieval, and opening the image. These are user-reported results, not sandbox verification. That report predates the new agent's Windows/API end-to-end test.
+On 2026-11-05 the owner reported a Windows 11 local run at `http://127.0.0.1:8765`: the controller started, Blender was detected, UI Automation discovered 106 interactive inputs, `GET /health` returned `ok: true`, and `GET /v1/screenshot` returned HTTP 200 with `image/png`; a 403,510-byte screenshot was retrieved and opened. Blender mailbox configuration was detected. The owner had also previously reported a successful Blender 5.2.0 LTS probe/command/object/render/image-retrieval run. These are owner-reported results, not sandbox verification. They verify the controller and screenshot retrieval, but not the independent agent's model call or model visual interpretation.
 
 ## Outstanding / not verified
 

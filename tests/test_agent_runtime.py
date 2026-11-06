@@ -87,7 +87,12 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(visual_input.role, "user")
         self.assertEqual(visual_input.images, (ImageAttachment("image/png", PNG),))
         self.assertEqual(events[0].kind, "task_started")
-        self.assertTrue(any(event.kind == "tool_completed" and event.data.get("image_included") for event in events))
+        image_event = next(
+            event for event in events
+            if event.kind == "tool_completed" and event.data.get("image_included")
+        )
+        self.assertEqual(image_event.data["image_mime_type"], "image/png")
+        self.assertEqual(image_event.data["image_bytes"], len(PNG))
 
     def test_multiple_tool_replies_precede_image_messages(self):
         bridge = FakeBridge()

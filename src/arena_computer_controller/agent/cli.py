@@ -36,7 +36,12 @@ def _progress(event: AgentEvent) -> None:
     elif event.kind == "tool_started":
         print(f"[tool] {event.tool_name}: started", file=sys.stderr, flush=True)
     elif event.kind == "tool_completed":
-        image = "; image attached for the next model request" if event.data.get("image_included") else ""
+        image = ""
+        if event.data.get("image_included"):
+            image = (
+                f"; {event.data.get('image_mime_type')} {event.data.get('image_bytes')} bytes "
+                "attached for the next model request"
+            )
         error = "; tool reported an error" if event.data.get("is_error") else ""
         print(f"[tool] {event.tool_name}: completed{image}{error}", file=sys.stderr, flush=True)
     elif event.kind in {"approval_denied", "tool_limit", "turn_limit"}:
@@ -52,6 +57,14 @@ def _approve_blender_mutation(tool: ToolSpec, call: ToolCall) -> bool:
     except EOFError:
         return False
     return answer.strip().casefold() == "yes"
+
+
+def _check_controller_ready(client: ControllerHTTPClient) -> dict[str, object]:
+    """Fail before a billable model request if the local controller is offline."""
+    health = client.get_json("/health", timeout=5.0)
+    if health.get("ok") is not True:
+        raise ValueError("The local controller health check did not return ok: true.")
+    return health
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -111,12 +124,17 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             timeout=args.timeout,
         )
-        bridge = ControllerMCPBridge(
-            ControllerHTTPClient(
-                base_url=args.controller_url,
-                token=controller_token,
-            )
+        controller_client = ControllerHTTPClient(
+            base_url=args.controller_url,
+            token=controller_token,
         )
+        health = _check_controller_ready(controller_client)
+        print(
+            f"[controller] healthy at {controller_client.base_url} (version {health.get('version', 'unknown')})",
+            file=sys.stderr,
+            flush=True,
+        )
+        bridge = ControllerMCPBridge(controller_client)
         runtime = AgentRuntime(
             provider,
             build_controller_tools(bridge),

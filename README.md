@@ -79,7 +79,9 @@ The new runtime is a local, one-task Python agent—not an OpenCode or Arena Web
 In PowerShell, set the key locally (do not commit it or send it in chat) and run a screen-description task:
 
 ```powershell
-$env:ARENA_MODEL_API_KEY = "your-api-key"
+$secureKey = Read-Host "Arena model API key (input is masked)" -AsSecureString
+$env:ARENA_MODEL_API_KEY = [System.Net.NetworkCredential]::new("", $secureKey).Password
+Remove-Variable secureKey
 # Defaults shown explicitly; override these for another OpenAI-compatible provider/model.
 $env:ARENA_MODEL_BASE_URL = "https://api.arena.ai/v1"
 $env:ARENA_MODEL_NAME = "coding-router-preview"
@@ -97,7 +99,7 @@ Configuration environment variables:
 - `ARENA_AGENT_MAX_TURNS` / `--max-turns` (default 8) and `ARENA_AGENT_MAX_TOOL_CALLS` / `--max-tool-calls` (default 12).
 - `ARENA_CONTROLLER_URL` / `--controller-url` (default `http://127.0.0.1:8765`), plus `ARENA_CONTROLLER_TOKEN` only if the controller requires it.
 
-The runtime offers the same six state/screenshot/Blender tools as the existing bridge. `blender_execute` always asks for explicit `yes` approval in the console before submission; declining or running without an interactive approval leaves the scene unchanged. Progress and tool status go to stderr; the final answer goes to stdout. The default desktop screenshot is JPEG at quality 90 and 0.75 scale. If a tool returns image bytes, they are added to the subsequent model request as `data:image/...;base64,...`; file paths and URLs alone are not used. The bridge's image hash suppression still applies to unchanged screenshots. The model must actually support image input for screenshot interpretation.
+Before making a model request, the CLI checks the loopback controller's `/health` endpoint so an offline controller fails locally without a billable model call. The runtime offers the same six state/screenshot/Blender tools as the existing bridge. `blender_execute` always asks for explicit `yes` approval in the console before submission; declining or running without an interactive approval leaves the scene unchanged. Progress and tool status go to stderr (including screenshot MIME type/byte count when an image is queued); the final answer goes to stdout. The default desktop screenshot is JPEG at quality 90 and 0.75 scale. If a tool returns image bytes, they are added to the subsequent model request as `data:image/...;base64,...`; file paths and URLs alone are not used. The bridge's image hash suppression still applies to unchanged screenshots. The model must actually support image input for screenshot interpretation.
 
 This first version is non-streaming, has no persistent session or GUI, and does not yet expose general desktop click/type actions or app launch as model tools. See [`docs/agent-runtime.md`](docs/agent-runtime.md) for the data flow, limits, security notes, and owner-side acceptance sequence.
 
@@ -250,4 +252,4 @@ The Blender adapter tests use an independent fake connector/mailbox. They cover 
 
 ### Live Windows / Blender 5.2 verification
 
-The copy-pasteable, two-terminal procedure—including Python/Windows dependency setup, process detection, `hello_test`, primitive creation and dimension changes, camera rendering, direct PNG retrieval, success checks, and common errors—is in [`docs/windows-blender-controller-test.md`](docs/windows-blender-controller-test.md). The owner reported a successful Windows/Blender 5.2.0 LTS integration run; this agent did not rerun it. The new direct-API agent still needs live model/screenshot verification; optional Arena MCP host launch and MCP image-block delivery remain separate unverified paths.
+The copy-pasteable, two-terminal procedure—including Python/Windows dependency setup, process detection, `hello_test`, primitive creation and dimension changes, camera rendering, direct PNG retrieval, success checks, and common errors—is in [`docs/windows-blender-controller-test.md`](docs/windows-blender-controller-test.md). On 2026-11-05 the owner reported Windows 11 UI Automation discovered 106 controls and a 403,510-byte PNG screenshot was retrieved and opened; Blender 5.2 controller integration was also previously reported successful. This agent did not rerun those Windows tests. The new direct-API agent still needs live model/screenshot verification; optional Arena MCP host launch and MCP image-block delivery remain separate unverified paths.

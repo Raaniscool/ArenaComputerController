@@ -131,7 +131,12 @@ class AgentRuntime:
                         "Tool returned an image." if result.image else "Tool returned a result.",
                         tool_name=call.name,
                         tool_call_id=call.id,
-                        data={"is_error": result.is_error, "image_included": result.image is not None},
+                        data={
+                            "is_error": result.is_error,
+                            "image_included": result.image is not None,
+                            "image_mime_type": result.image.mime_type if result.image is not None else None,
+                            "image_bytes": len(result.image.data) if result.image is not None else 0,
+                        },
                     )
                 )
             messages.extend(image_messages)
