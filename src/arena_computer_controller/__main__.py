@@ -96,7 +96,11 @@ def main(argv: list[str] | None = None) -> int:
             blender_adapter = BlenderMailboxAdapter(connector_root)
             print(f"Blender mailbox adapter: configured from {connector_root}", flush=True)
         except Exception as exc:
-            print(f"Blender mailbox adapter: unavailable ({type(exc).__name__})", file=sys.stderr, flush=True)
+            print(
+                f"Blender mailbox adapter: unavailable ({type(exc).__name__}: {exc})",
+                file=sys.stderr,
+                flush=True,
+            )
     else:
         print("Blender mailbox adapter: not configured (set ARENA_BLENDER_WORKSHOP_PATH)", flush=True)
     server = create_server(controller, args.host, args.port, token, blender_adapter=blender_adapter)
