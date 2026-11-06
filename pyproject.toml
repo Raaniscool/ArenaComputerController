@@ -25,6 +25,7 @@ mcp = ["mcp>=2.3.0,<3; python_version >= '3.11'"]
 [project.scripts]
 arena-computer-controller = "arena_computer_controller.__main__:main"
 arena-computer-controller-mcp = "arena_computer_controller.mcp_server:main"
+arena-computer-agent = "arena_computer_controller.agent.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

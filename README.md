@@ -1,6 +1,6 @@
 # ArenaComputerController
 
-A small, local-first Windows desktop-control prototype. It exposes a provider-neutral JSON API for desktop state, Windows UI Automation inputs, actions, and screenshots requested on demand.
+A local-first Windows desktop controller with an independent Python model-agent runtime. The controller exposes a provider-neutral JSON API for desktop state, Windows UI Automation inputs, actions, and screenshots requested on demand; the CLI runtime reasons through model APIs and uses the controller without requiring an external agent application.
 
 ## Repository assessment
 
@@ -22,8 +22,10 @@ Implemented:
 - Provides an opt-in Blender adapter that imports the existing external connector's validated job builder, allowlist, mailbox, and result waiter. It probes with `hello_test`, bounds waits, keeps structured failures, deduplicates retries that use the same `request_id`, and returns camera-render PNG bytes directly from the controller.
 - Keeps the controller API dependency-free. Windows automation/image libraries and the new MCP SDK are optional extras; the MCP process calls only the existing loopback controller API.
 - Provides an optional, stdio-only MCP adapter with bounded state/probe/execute tools and native image-content results. It has no network listener, tunnel, arbitrary Python, or shell tool. The controller and connector remain responsible for validating existing operation schemas.
+- Provides an independent Python agent runtime and CLI. It uses a provider-neutral model interface, a stdlib OpenAI-compatible API adapter (Arena Router by default), bounded sequential tool calls, progress events, and an explicit console approval gate for Blender mutations. It reuses the existing MCP bridge directly and does not require an MCP SDK or another agent application.
+- Delivers screenshot bytes to the provider as an actual image input (data URI), not a local path or URL. Unit tests verify serialization of image bytes and the state → screenshot → model loop using a fake provider.
 
-Not implemented in this task: integration between this computer controller and the existing Roblox Studio connector, event-driven live updates, automatic input-map diffing, multi-provider AI adapters, a dashboard, and AI-provider latency/token measurements. The owner reported that the Windows/Blender 5.2 controller integration has passed a live test. Arena process launch and screenshot delivery to the model's visual context remain unverified.
+Not implemented yet: a graphical interface, persistent chat sessions, streaming model output, native adapters for additional providers, application launching, exposure of general Windows actions as agent tools, or integration of the separate Roblox Studio connector into the new agent. Live Arena API tool calling, Windows screenshot capture, and model visual understanding still require owner-side verification. The owner reported that the Windows/Blender 5.2 controller integration has passed a live test.
 
 ## Run on Windows
 
@@ -70,6 +72,35 @@ Replace that path if the checkout is elsewhere. Run the controller and Blender 5
 
 The connector's bounded protocol allowlist is reused as-is: `hello_test`, `create_test_object`, `create_primitive`, `move_object`, `rotate_object`, `scale_object`, `rename_object`, `create_material`, `capture_screenshot`, `duplicate_object`, `delete_object`, and `set_dimensions`. Arbitrary Python or unlisted operations cannot be submitted. The adapter waits at most 540 seconds (60 seconds by default; 5 seconds for a probe). A timeout returns the job ID and does not re-enqueue; repeat the same intent with the same `request_id` to safely check/retrieve it. Reusing an ID with different command data is rejected.
 
+### Independent agent runtime (CLI)
+
+The new runtime is a local, one-task Python agent—not an OpenCode or Arena Web Agent Mode wrapper. It calls the existing loopback controller through `ControllerMCPBridge`, so the optional MCP SDK is not needed. Run the controller in one terminal as described above, then configure a model API key in the agent's separate terminal. Arena Router is the default candidate provider; API access is workspace-dependent, and pricing depends on the account/model. Check current access, usage, and billing in your provider account before use. This sandbox has not made a live API call.
+
+In PowerShell, set the key locally (do not commit it or send it in chat) and run a screen-description task:
+
+```powershell
+$env:ARENA_MODEL_API_KEY = "your-api-key"
+# Defaults shown explicitly; override these for another OpenAI-compatible provider/model.
+$env:ARENA_MODEL_BASE_URL = "https://api.arena.ai/v1"
+$env:ARENA_MODEL_NAME = "coding-router-preview"
+python -m arena_computer_controller.agent "Describe what is visible on my computer screen."
+```
+
+The equivalent installed command is `arena-computer-agent "Describe what is visible on my computer screen."`. The key is read only from `ARENA_MODEL_API_KEY`; do not put credentials in source, a task string, or command-line arguments. If the controller was started with `ARENA_CONTROLLER_TOKEN`, set the same token in the agent process environment. The model and controller tokens are separate credentials.
+
+Configuration environment variables:
+
+- `ARENA_MODEL_API_KEY` (required): provider key, never logged by the runtime.
+- `ARENA_MODEL_BASE_URL` / `--api-base` (default `https://api.arena.ai/v1`): HTTPS OpenAI-compatible API base; plain HTTP is allowed only for loopback testing.
+- `ARENA_MODEL_NAME` / `--model` (default `coding-router-preview`).
+- `ARENA_MODEL_TIMEOUT` / `--timeout` (default 120 seconds).
+- `ARENA_AGENT_MAX_TURNS` / `--max-turns` (default 8) and `ARENA_AGENT_MAX_TOOL_CALLS` / `--max-tool-calls` (default 12).
+- `ARENA_CONTROLLER_URL` / `--controller-url` (default `http://127.0.0.1:8765`), plus `ARENA_CONTROLLER_TOKEN` only if the controller requires it.
+
+The runtime offers the same six state/screenshot/Blender tools as the existing bridge. `blender_execute` always asks for explicit `yes` approval in the console before submission; declining or running without an interactive approval leaves the scene unchanged. Progress and tool status go to stderr; the final answer goes to stdout. The default desktop screenshot is JPEG at quality 90 and 0.75 scale. If a tool returns image bytes, they are added to the subsequent model request as `data:image/...;base64,...`; file paths and URLs alone are not used. The bridge's image hash suppression still applies to unchanged screenshots. The model must actually support image input for screenshot interpretation.
+
+This first version is non-streaming, has no persistent session or GUI, and does not yet expose general desktop click/type actions or app launch as model tools. See [`docs/agent-runtime.md`](docs/agent-runtime.md) for the data flow, limits, security notes, and owner-side acceptance sequence.
+
 ### Optional stdio MCP adapter
 
 The optional MCP process exposes the existing controller tools to an MCP host over **stdio only**. It opens no network port and will only call `http://localhost` or an IP loopback controller URL. This first version does not provide a tunnel or remote transport.
@@ -94,7 +125,7 @@ Use the equivalent fields in the MCP host's own configuration UI; this repositor
 
 The server registers six tools: `get_computer_state`, `get_active_window`, `get_screenshot`, `blender_probe`, `blender_execute`, and `blender_get_screenshot`. The Blender operation names and parameter shapes remain those listed above; the existing controller and connector perform validation. Each `blender_execute` call requires a unique `request_id`; reuse that same ID unchanged when retrying that operation. To render through MCP, call `blender_execute` with `operation="capture_screenshot"`, a new request ID, and (optionally) `parameters={"width":640,"height":480}`; pass the returned `job_id` to `blender_get_screenshot` to fetch the camera-render PNG. Desktop screenshots default to JPEG quality 90 at 0.75 scale; request PNG for lossless pixels. MCP results include structured metadata and a native image block. Identical image bytes are omitted after the first return to avoid resending large content; pass `force=true` to include the bytes again. The default per-image cap is 8 MiB (`ARENA_MCP_MAX_IMAGE_BYTES` can be set from 1 KiB to 20 MiB).
 
-The controller does not expose a complete Blender scene inventory. Keep track of object names and changes from tool results, and do not infer properties the tools have not returned. The intended Arena acceptance run remains: create two objects, modify one, render and inspect the returned image, make an image-informed change, and render again. Image-block delivery to the model's visual context is not yet verified.
+The controller does not expose a complete Blender scene inventory. Keep track of object names and changes from tool results, and do not infer properties the tools have not returned. For clients using this optional MCP path, the historical acceptance scenario is to create two objects, modify one, render and inspect the returned image, make an image-informed change, and render again. Arena MCP host launch and image-block delivery to a model's visual context remain unverified; they are separate from the direct-API agent runtime described above.
 
 ## API
 
@@ -201,13 +232,14 @@ It compares MSS and Pillow ImageGrab capture time when run with `--capture`, the
 
 ## Tests
 
-The controller and adapter tests run on any Python 3.10+ host without installing Windows extras:
+The controller, agent-runtime, and adapter tests run on any Python 3.10+ host without installing Windows extras or making model API calls:
 
 ```bash
 python -m unittest discover -s tests -v
+python -m arena_computer_controller.agent --help
 ```
 
-MCP bridge validation tests run without the MCP SDK. To also exercise SDK tool registration, native image blocks, and an actual stdio client handshake, install the optional extra in Python 3.11+ and rerun the same suite:
+Agent tests cover tool dispatch, approval denial/approval, budgets, sanitized errors, real image bytes in the model request, and provider request/response handling. The live Arena/provider and Windows acceptance sequence is not simulated by these unit tests. MCP bridge validation tests run without the MCP SDK. To also exercise SDK tool registration, native image blocks, and an actual stdio client handshake, install the optional extra in Python 3.11+ and rerun the same suite:
 
 ```powershell
 python -m pip install -e ".[mcp]"
@@ -218,4 +250,4 @@ The Blender adapter tests use an independent fake connector/mailbox. They cover 
 
 ### Live Windows / Blender 5.2 verification
 
-The copy-pasteable, two-terminal procedure—including Python/Windows dependency setup, process detection, `hello_test`, primitive creation and dimension changes, camera rendering, direct PNG retrieval, success checks, and common errors—is in [`docs/windows-blender-controller-test.md`](docs/windows-blender-controller-test.md). The owner reported a successful Windows/Blender 5.2.0 LTS integration run; this agent did not rerun it. The two-object iterative workflow through Arena MCP, Arena's ability to launch a local stdio process, and image delivery to the model's visual context remain unverified.
+The copy-pasteable, two-terminal procedure—including Python/Windows dependency setup, process detection, `hello_test`, primitive creation and dimension changes, camera rendering, direct PNG retrieval, success checks, and common errors—is in [`docs/windows-blender-controller-test.md`](docs/windows-blender-controller-test.md). The owner reported a successful Windows/Blender 5.2.0 LTS integration run; this agent did not rerun it. The new direct-API agent still needs live model/screenshot verification; optional Arena MCP host launch and MCP image-block delivery remain separate unverified paths.

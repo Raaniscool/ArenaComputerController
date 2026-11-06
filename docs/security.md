@@ -1,5 +1,15 @@
 # Security boundaries
 
+## Independent local model runtime
+
+- `arena-computer-agent` is a local CLI. Its controller client accepts only an HTTP loopback origin; the agent does not create a listener, public URL, or tunnel. The controller remains bound to loopback by default and refuses a non-loopback bind without a bearer token.
+- The model API key is read from `ARENA_MODEL_API_KEY` and sent only in the provider's HTTPS `Authorization` header. It is not placed in source, model messages, or progress output. Redirects are disabled so the API key is not forwarded to a redirect destination. Provider errors do not echo response bodies or credentials. Keep the API key out of terminal recordings and screenshots.
+- The controller bearer token, when configured, is separate. It is used only for local loopback controller requests and is never placed in the model conversation.
+- By design, task text, the controller's returned state, model tool calls, tool results, and any requested screenshot bytes are sent to the configured model provider. Screenshot image bytes are base64-encoded as a real image input in the HTTPS model request; they are not reduced to a path or hash. A desktop screenshot or state may contain private information. Use only a provider/workspace approved for that data, review its retention and billing terms, and avoid requesting screenshots of sensitive windows.
+- Screenshot capture is on demand. The existing bridge validates image type/size and suppresses byte-identical repeats unless forced. The provider adapter caps request and response sizes and has a configurable timeout; the runtime does not write model conversations or screenshots to persistent storage.
+- The agent currently exposes only the existing six state/screenshot/Blender tools. Blender execution is separately gated by a console approval prompt and revalidated against the existing allowlist/request-ID path. The agent has no arbitrary shell/Python tool, and general Windows click/type actions are not currently exposed as model tools.
+- `ARENA_MODEL_BASE_URL` is configurable for compatible providers. Remote providers must use HTTPS; plain HTTP is allowed only for localhost testing. The owner is responsible for selecting a trusted endpoint. Account access, model availability, image support, and usage cost must be verified in that provider account.
+
 ## Preserved Phase 3 controls
 
 - Service binds to `127.0.0.1`; never expose or port-forward it. `GET /health` is unauthenticated and contains no project data.

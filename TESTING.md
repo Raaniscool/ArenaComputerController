@@ -2,38 +2,56 @@
 
 Updated: 2026-11-05
 
-## Verified before this MCP implementation
+## Existing controller, Blender, and MCP coverage
 
-These results were recorded at commit `1442233d4a97e40105ecf3da3e2855da995925a5` before the current MCP adapter changes:
+Before the independent agent runtime was added, the controller/bridge suite was recorded at 171 tests. The stdio MCP adapter and existing controller/Blender integration remain unchanged by the runtime work.
 
-- `python -m unittest discover -s tests -v` — 150 tests passed.
+- `PYTHONPATH=src:. python -m unittest discover -s tests -q` — 171 tests passed; 6 optional MCP SDK tests were skipped in the default environment.
+- The same pre-runtime suite in a disposable Python 3.11 environment with `mcp==2.3.0` — 171 tests passed, no skips. MCP coverage includes six-tool registration, operation enum matching the existing `SUPPORTED_OPERATIONS`, stable `request_id`, native JPEG/PNG image content, and stdio initialize/list-tools plus image-result round trip.
+- `npm test` — 31 Roblox connector tests passed.
+- `python -m compileall -q src tests`, `git diff --check`, TOML parsing, and `python -m pip install --dry-run --no-deps -e '.[mcp]'` — passed for that earlier adapter revision.
+
+Resolved earlier MCP diagnostic: an initial SDK registration check exposed deferred return annotations that the SDK could not resolve on nested tool functions. The annotations were removed; the optional-SDK suite and stdio tests passed afterward.
+
+## Independent agent runtime (current implementation)
+
+- `PYTHONPATH=src:. python -m unittest tests.test_agent_provider tests.test_agent_runtime -v` — 16 agent tests passed.
+- `PYTHONPATH=src:. python -m unittest discover -s tests -q` — 187 total tests passed, with 6 optional MCP SDK tests skipped in the default Python environment.
+- The same full suite using the existing disposable environment with `mcp==2.3.0` — 187 tests passed, no skips.
 - `npm test` — 31 tests passed.
-- `python -m compileall -q src tests` — passed.
-- `git diff --check` — passed.
-- The Windows/Blender guide and existing controller integration had prior simulated test coverage.
+- `PYTHONPATH=src:. python -m compileall -q src tests` — passed.
+- `python -m arena_computer_controller.agent --help` — passed without requiring an API key or controller connection.
+- `git diff --check` and `pyproject.toml` parsing/entry-point validation — passed.
+- The first `pip install --dry-run` attempt against the system Python was blocked by the OS's PEP 668 externally-managed-environment guard. No system install was attempted. Retrying in a disposable venv with `--dry-run --no-deps --no-build-isolation -e .` passed and reported the editable project as installable.
 
-## Current implementation tests
+Coverage added for the agent:
 
-- `PYTHONPATH=src:. python -m unittest discover -s tests -q` — 171 tests passed; 6 optional MCP SDK tests skipped because the default environment does not have the SDK installed.
-- The same full suite in a disposable Python 3.11 environment with `mcp==2.3.0` — 171 tests passed, no skips. MCP-specific coverage includes six-tool registration, operation enum matching the existing `SUPPORTED_OPERATIONS`, required stable `request_id`, native JPEG/PNG image content, and stdio initialize/list-tools plus a complete stdio image-result round trip.
-- `npm test` — 31 tests passed.
-- `python -m compileall -q src tests`, `git diff --check`, parsing `pyproject.toml`, and `python -m pip install --dry-run --no-deps -e '.[mcp]'` — passed.
-- The MCP SDK was installed only in `/tmp/arena-mcp-test-venv`; no runtime dependency was installed into the project environment.
+- OpenAI-compatible tool/function schema serialization and response parsing.
+- Actual screenshot bytes serialized as a `data:image/png;base64,...` image input (not a file path or URL).
+- API URL restrictions, timeouts/request-response size limits, invalid responses, and safe HTTP-error messages that do not echo the API key or response body.
+- `get_computer_state` followed by `get_screenshot`, image bytes attached to the next model turn, tool error dispatch, and multiple tool-reply ordering.
+- Blender approval denied by default, explicit approval flow, stable request ID derived from the tool-call ID, tool-call budget, and preserved six-tool surface.
 
-Resolved implementation diagnostic: the first MCP SDK registration check exposed deferred return annotations that the SDK could not resolve on nested tool functions. The annotations were removed; the complete optional-SDK suite and stdio tests now pass.
+These are unit tests with fake model responses and a fake controller bridge. They do **not** prove a real Arena Router API call, real provider tool calling, real Windows screenshot capture, or model visual understanding. No API key or screenshot data was supplied to the test run.
 
 ## Owner-reported Windows/Blender results (not independently run here)
 
-The owner reported a successful run using Windows, Blender 5.2.0 LTS, and the controller endpoint `http://127.0.0.1:8765`, including controller routes, Blender probe/commands, object creation, EEVEE render, image retrieval, and opening the image. These are user-reported results, not sandbox verification. A two-object, image-informed iteration run through Arena MCP is still outstanding.
+The owner previously reported a successful run using Windows, Blender 5.2.0 LTS, and the controller endpoint `http://127.0.0.1:8765`, including controller routes, Blender probe/commands, object creation, EEVEE render, image retrieval, and opening the image. These are user-reported results, not sandbox verification. That report predates the new agent's Windows/API end-to-end test.
 
 ## Outstanding / not verified
 
-- Whether Arena's MCP host can spawn the stdio process on the owner's Windows machine.
-- Whether a screenshot `ImageContent` result reaches the model's visual context in this Arena session.
-- The requested two-object workflow: create two objects, modify one, render, retrieve and visually inspect, apply an image-informed change, render again.
-- Complete scene inventory and unreported Blender properties remain unavailable through the existing controller tools.
-- Live Windows UI Automation and physical desktop screenshot behavior are not exercised in this Linux sandbox.
+- Arena Router API eligibility, live tool-call behavior, current model support, exact account pricing, and image input on the user's workspace.
+- On Windows, verify that the runtime calls `get_computer_state`, reads its result, calls `get_screenshot`, sends the image bytes in the next model request, and describes visible pixels.
+- On Windows with Blender 5.2, run `blender_probe`, create one harmless named primitive with console approval, retrieve a camera render, and confirm actual model vision.
+- General Windows action tools, app launch, persistent session/UI behavior, provider retry/backoff, and Roblox integration are future work.
+- Physical Windows UI Automation and screenshots are not exercised in this Linux sandbox.
+
+Record any owner-side run below, without secrets or sensitive screenshot contents. Include provider/model, image format/size, tool sequence, outcome, and cost if the provider dashboard reports it.
+
+### Owner-side agent acceptance results
+
+_Not run yet._
 
 ## Failures
 
-No outstanding test failures. The resolved SDK diagnostic above is included to preserve the implementation test history.
+No outstanding test failures. The PEP 668 packaging diagnostic was resolved by performing the editable-install dry run in a disposable venv; no global packages were changed. The expected fixture log `Job missing-object-job failed: object_not_found` appears during the existing Python suite and is not a test failure.
