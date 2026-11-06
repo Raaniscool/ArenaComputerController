@@ -1,0 +1,8 @@
+{
+  "name": "arena-roblox-connector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first, security-focused Arena to Roblox Studio connector foundation",
+  "scripts": {"start": "node server/index.js", "test": "node --test"},
+  "engines": {"node": ">=18"}
+}

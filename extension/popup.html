@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Arena Roblox Connector</title>
+  <style>
+    :root { color-scheme: dark; font: 14px/1.45 system-ui, sans-serif; }
+    body { width: 340px; margin: 0; padding: 16px; background: #171b24; color: #eef2f8; }
+    h1 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 8px 0; color: #c4ccda; }
+    label { display: block; margin: 12px 0 5px; font-weight: 600; }
+    input { box-sizing: border-box; width: 100%; padding: 9px; border: 1px solid #515d71; border-radius: 6px; background: #252c39; color: white; }
+    button { margin: 10px 7px 0 0; padding: 8px 12px; border: 0; border-radius: 6px; background: #3978c5; color: white; font-weight: 600; cursor: pointer; }
+    button.secondary { background: #434c5d; }
+    #status { min-height: 38px; padding: 8px; border-radius: 6px; background: #252c39; white-space: pre-wrap; }
+    .note { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Arena Roblox Connector</h1>
+  <p>Supports only <b>create_test_folder</b> and <b>create_part</b>. Every mutation is approved in Roblox Studio.</p>
+  <label for="token">Extension token</label>
+  <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="CONNECTOR_EXTENSION_TOKEN">
+  <button id="save">Save token</button><button class="secondary" id="check">Check connector</button>
+  <p id="status" role="status">Extension token is stored locally in this browser profile.</p>
+  <p class="note">The token is saved to extension-local storage and read only by the service worker for connector requests. It is never inserted into the Arena page or prompt. Keep the Studio and extension tokens separate.</p>
+  <script src="popup.js"></script>
+</body>
+</html>

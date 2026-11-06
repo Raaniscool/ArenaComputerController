@@ -1,0 +1,732 @@
+diff --git a/README.md b/README.md
+index 9d626a7..9dea347 100644
+--- a/README.md
++++ b/README.md
+@@ -4,7 +4,7 @@ A local-first, security-focused Arena Direct → loopback connector → Roblox S
+ 
+ ## Current status
+ 
+-**Phases 4B and 5A are implemented and verified in a Windows Arena Direct → extension → loopback connector → Studio approval → Workspace flow.** The user confirmed approved `create_part` creation with exact properties, rejected requests creating nothing, duplicate-name refusal without changing the existing object, and a Folder regression. **Phase 6A read-only inspection is implemented in code and Node-tested, but its Roblox Studio runtime is awaiting the user’s manual test.** The MV3 extension watches only new Arena Direct assistant replies, recognizes one delimited `create_test_folder` or `create_part` JSON operation, and submits only that typed request to the loopback server. The Studio plugin reports a bounded Phase 3 overview, requires mandatory approval/reject for mutations, and can create exactly one `Folder` or constrained `Part` under `Workspace`. Phase 6A adds a separate on-demand read-only Workspace snapshot path. No assistant-generated JavaScript or Luau is accepted or executed. The user verified the `create_test_folder` Arena-to-Studio path in a real Windows browser and Studio session.
++**Source status:** The accessible working tree contains the bounded `create_model` implementation alongside typed Folder/Part operations and Phase 6A read-only Workspace inspection. `create_model` allows one Model with 2–4 uniquely named ordinary anchored Parts under the fixed `Workspace/ArenaConnectorStaging` destination, with a full Studio approval preview, strict property bounds, and request-ID reconciliation. The user previously verified Folder/Part flows in Windows and reports that read-only inspection succeeds. **The separately inspected Windows source and Arena panel did not expose `create_model`; that Windows checkout and installed extension/plugin have not been updated or live-tested for Model creation.** Passing local Node tests is not live Model verification. No assistant-provided JavaScript or Luau is accepted or executed.
+ 
+ The Arena DOM adapter follows the independently published ZeroScript Free Arena Direct provider (its source describes live validation in June 2026). The current Arena DOM/streaming behavior in October 2026 has not been observed in this environment. The extension fails closed if it cannot confirm Direct mode or find the expected response structure. See [research](docs/research.md) and [manual verification](docs/development.md).
+ 
+@@ -16,12 +16,12 @@ See [docs/development.md](docs/development.md) for the full PowerShell, plugin,
+ 
+ - `GET /health`: unauthenticated process health only.
+ - Existing authenticated plugin session and read-only overview routes remain available.
+-- Extension-authenticated `POST /v1/operations` accepts only `create_test_folder` (bounded safe name) or `create_part` (strict bounded fields), each with a UUID request ID; duplicates, oversized payloads, malformed requests, and unsupported operations are rejected.
++- Extension-authenticated `POST /v1/operations` accepts only `create_test_folder`, `create_part`, or `create_model`, each with a UUID request ID. `create_model` allows 2–4 uniquely named ordinary Parts with bounded positions/sizes/colors/materials, a 128-stud maximum aggregate extent per axis, and no caller-selected parent; malformed, duplicate, oversized, and unsupported requests are rejected.
+ - Studio heartbeat delivers the pending request and a short-lived approval capability only to the authenticated plugin. The plugin must receive an explicit user click before it creates anything. A refusal or expiry makes no change.
+-- After approval, the plugin creates one `Folder` or constrained `Part` under `Workspace`, tagged with the request ID to prevent duplicate creation on retry. The truthful result is shown in the extension panel; an optional button inserts it as an **unsent draft** in Arena for user review.
++- After approval, the plugin creates one `Folder` or constrained `Part` under `Workspace`, or one approved Model under `Workspace/ArenaConnectorStaging` with 2–4 anchored ordinary Parts. Request-ID tags and full read-back checks support reconciliation; name collisions fail without overwriting. The truthful result is shown in the extension panel; an optional button inserts it as an **unsent draft** in Arena for user review.
+ - Phase 6A inspection is separate from mutation operations: an explicit extension-panel action requests a breadth-first snapshot to depth two, stopping at 32 objects and a 14 KiB serialized-snapshot cap (with result transport capped at 16 KiB). It contains names/classes, temporary snapshot-local IDs and parent links, and only Position, Size, RGB Color, Material, Anchored, and CanCollide for BaseParts. Script source, arbitrary properties, attributes, player data, and other services are excluded. Top-level Models with a direct Humanoid are omitted with descendants as a character-privacy guard; the plugin does not query the Players service. Depth/record omissions are marked `truncated`; snapshot IDs are temporary and not stable Roblox identifiers. Requests/results expire and are bound to the active Studio session.
+ - The extension does not upload conversation history or other page content. Only parsed operation fields and request ID cross for mutations; inspection data is returned only after a user-initiated snapshot request.
+-- No arbitrary script execution, arbitrary instance creation, editing/deletion, filesystem access, public listener, relay, or automatic Arena follow-up is included.
++- No arbitrary script execution, unallowlisted instance creation, editing/deletion, filesystem access, public listener, relay, or automatic Arena follow-up is included.
+ 
+ The in-memory session/operation queue clears on server restart. Automated tests cover parser, authentication separation, payload validation, mutation and inspection lifecycle, snapshot schema/limits/truncation, session binding, expiry, duplicate IDs, byte caps, and extension draft handoff wiring. A green local test suite is not a real Arena/Chrome/Studio integration test.
+ 
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 177b7d5..6df8cf3 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -6,7 +6,7 @@ The Studio plugin initiates connections to the loopback service. After the user
+ 
+ The overview is bounded: place/universe IDs, `IsStudio`, and class plus direct-child count for a fixed nine-service allowlist. No recursive traversal, script source, player state, OS files, or credentials are included. The server tracks one active session in memory; a newer registration replaces the old one and a heartbeat expires after 15 seconds.
+ 
+-## Phase 4B: browser extension handoff (implemented; `create_test_folder` Windows smoke test succeeded)
++## Phase 4B: browser extension handoff (typed allowlist; Windows Folder/Part flow verified)
+ 
+ ```text
+ Arena Direct prompt
+@@ -16,29 +16,35 @@ Arena Direct prompt
+   → service worker re-validates a single typed operation
+   → authenticated loopback API queues a short-lived request
+   → Studio plugin displays it and waits for an explicit Approve / Reject click
+-  → after approval the plugin creates one Workspace Folder or bounded Part
++  → after approval the plugin creates one Workspace Folder/Part or one bounded staged Model
+   → plugin reports outcome; extension shows it and can insert an unsent Arena draft
+ ```
+ 
+ The extension lives in `extension/` and is Manifest V3. It has permissions only for the Arena Direct/conversation page patterns, the connector at `127.0.0.1:4317`, and extension-local storage. The token is read only by the extension service worker from `chrome.storage.local`; the content script and Arena page never receive it. The instruction appended to the user's prompt contains only the public command schema, not a credential. Content-to-worker messages are validated again in the worker, which accepts messages only from the expected Arena Direct URLs.
+ 
+-Arena output must contain exactly one `BEGIN_ARENA_ROBLOX_COMMAND` / `END_ARENA_ROBLOX_COMMAND` block inside a rendered `<pre>`, with an exact operation-specific schema (no extra keys). Only rendered `<pre>` elements that are not hidden/ARIA-hidden and intersect the viewport are considered. Repeated references to the same DOM element are counted once; nested elements are collapsed only when they parse to the identical typed command. Distinct visible command blocks and nested conflicts are rejected. A response/render signature must remain unchanged for 1.8 seconds after generation ends before parsing. Only `create_test_folder` and `create_part` are allowed. Text outside the code block, unrelated assistant text, conversation history, and other page data are not sent to the connector. If Direct mode or the expected response structure cannot be confirmed, the extension fails closed and pauses handoff.
++Arena output must contain exactly one `BEGIN_ARENA_ROBLOX_COMMAND` / `END_ARENA_ROBLOX_COMMAND` block inside a rendered `<pre>`, with an exact operation-specific schema (no extra keys). Only rendered `<pre>` elements that are not hidden/ARIA-hidden and intersect the viewport are considered. Repeated references to the same DOM element are counted once; nested elements are collapsed only when they parse to the identical typed command. Distinct visible command blocks and nested conflicts are rejected. A response/render signature must remain unchanged for 1.8 seconds after generation ends before parsing. The current source allowlist is exactly `create_test_folder`, `create_part`, and `create_model`. The Windows source and panel previously inspected by the user exposed only the first two, so do not assume a Windows install supports Models until its source is updated and checked. Text outside the code block, unrelated assistant text, conversation history, and other page data are not sent to the connector. If Direct mode or the expected response structure cannot be confirmed, the extension fails closed and pauses handoff.
+ 
+-The extension request uses a UUID, an 8 KiB server body cap, a 60-second approval expiry, bounded queue/retention, duplicate rejection, and a separate `CONNECTOR_EXTENSION_TOKEN`. Plugin-only heartbeat/decision/result routes use `CONNECTOR_TOKEN`. The server issues a per-operation approval capability in the heartbeat response; the browser extension never receives it. Every mutation requires the Studio plugin's explicit user decision. Approval authorizes one server-validated operation and does not enable arbitrary code execution. The plugin creates one `Folder` or one strictly specified `Part` directly under `Workspace`, with a request-ID attribute so a retry can recognize its own prior result rather than create another object. It rejects any existing child with the requested name; it never overwrites or renames.
++The extension request uses a UUID, an 8 KiB server body cap, a 60-second approval expiry, bounded queue/retention, duplicate rejection, and a separate `CONNECTOR_EXTENSION_TOKEN`. Plugin-only heartbeat/decision/result routes use `CONNECTOR_TOKEN`. The server issues a per-operation approval capability in the heartbeat response; the browser extension never receives it. Every mutation requires the Studio plugin's explicit user decision. Approval authorizes one server-validated operation and does not enable arbitrary code execution. The plugin creates one `Folder` or one strictly specified `Part` directly under `Workspace`, or one `Model` under the fixed `Workspace/ArenaConnectorStaging` Folder. A Model contains 2–4 ordinary anchored Parts and is tagged with the request ID. On retry, the plugin validates the existing object and all requested properties before reporting a match; it rejects name collisions and mismatched markers without overwriting or renaming.
+ 
+ The result is returned to the extension status panel. The user may click **Draft result in Arena composer** to place the status in an unsent draft; the extension never auto-sends an assistant-visible claim. The result/queue is memory-only and can be lost if the local server restarts.
+ 
+ ## Phase 5A: constrained Part building block (Windows verification complete)
+ 
+-The extension and server accept one additional typed operation, `create_part`. Its exact JSON fields are `operation`, `name`, `position`, `size`, `color`, `material`, `anchored`, and `canCollide` (plus server `requestId`). `name` is 1–40 characters, trimmed, and limited to ASCII letters, digits, spaces, `_`, and `-`. `position` is `{x,y,z}` with finite numeric components in `[-10000,10000]` studs. `size` is `{x,y,z}` with finite numeric components in `[0.1,512]` studs. `color` is `{x,y,z}` of integer RGB components `[0,255]`. `material` must be one of `Plastic`, `SmoothPlastic`, `Wood`, `WoodPlanks`, `Concrete`, `Brick`, `Metal`, `Grass`, `Ice`, `Glass`, `Neon`, `Sand`, `Slate`, or `Marble`. `anchored` and `canCollide` must be booleans. Extra/missing fields are rejected; no rotation, parent, class selection, scripts, edits, deletes, or multi-instance operations are supported. The plugin approval preview presents the exact values and fixed Workspace parent. Existing names cause a safe failure without overwrite or rename. Automated parser/server tests cover schema validation, queueing, expiry, and capability boundaries. Windows Studio verification confirmed exact Part creation, rejection without creation, duplicate-name refusal with the original unchanged, and a Folder regression. Roblox runtime remains outside Node test coverage.
++The extension and server accept one additional typed operation, `create_part`. Its exact JSON fields are `operation`, `name`, `position`, `size`, `color`, `material`, `anchored`, and `canCollide` (plus server `requestId`). `name` is 1–40 characters, trimmed, and limited to ASCII letters, digits, spaces, `_`, and `-`. `position` is `{x,y,z}` with finite numeric components in `[-10000,10000]` studs. `size` is `{x,y,z}` with finite numeric components in `[0.1,512]` studs. `color` is `{x,y,z}` of integer RGB components `[0,255]`. `material` must be one of `Plastic`, `SmoothPlastic`, `Wood`, `WoodPlanks`, `Concrete`, `Brick`, `Metal`, `Grass`, `Ice`, `Glass`, `Neon`, `Sand`, `Slate`, or `Marble`. `anchored` and `canCollide` must be booleans. Extra/missing fields are rejected; this single-Part operation exposes no rotation, parent, class selection, scripts, edits, or deletes. A separate `create_model` operation is bounded to 2–4 ordinary Parts and the fixed staging target. The plugin approval preview presents the exact values and fixed Workspace parent. Existing names cause a safe failure without overwrite or rename. Automated parser/server tests cover schema validation, queueing, expiry, and capability boundaries. Windows Studio verification confirmed exact Part creation, rejection without creation, duplicate-name refusal with the original unchanged, and a Folder regression. Roblox runtime remains outside Node test coverage.
+ 
+-## Phase 6A: one-shot read-only Workspace inspection (implemented; Studio runtime pending)
++## Phase 5B: bounded Model construction (source implemented; Windows Model runtime not verified)
++
++`create_model` accepts exactly `operation`, `name`, and `parts` in the browser parser, and the server adds a UUID `requestId`. The Model name and each Part name use the safe 1–40-character ASCII name contract; Part names must be unique. There must be 2–4 ordinary Parts. Each Part has exactly `name`, `position`, `size`, `color`, `material`, and `canCollide`; `anchored` is intentionally not caller-controlled and is always set to `true`. Positions are finite numbers in `[-10000,10000]`, size components in `[0.1,64]`, RGB components are integers in `[0,255]`, materials come from the fixed allowlist, and the combined bounding extent is at most 128 studs on each axis. Extra/missing fields and unsafe bounds are rejected.
++
++The destination is fixed to `Workspace/ArenaConnectorStaging`; the caller cannot supply a parent or class. The Studio preview lists the target, Model name, Part count, and every Part's requested properties before the single **Approve Model** action. The plugin rejects staging/name collisions, constructs ordinary anchored Parts, verifies the complete Model before and after parenting, tags it with the request ID, and checks an existing tagged Model against the original request before reporting a retry as complete. Automated coverage includes parser/schema constraints, server authentication/queue/expiry/session/duplicate-ID behavior, and static plugin-source checks. No Roblox Studio Model mutation has been run in this environment.
++
++## Phase 6A: one-shot read-only Workspace inspection (implemented; user reports Windows runtime success)
+ 
+ An explicit **Inspect Workspace** action in the enabled Arena Direct extension panel creates a UUID request. Inspection has separate `/v1/inspections` request, status, and result routes and separate in-memory job records; it does not enter or modify the mutation queue and does not change Studio approval semantics. The extension credential creates/reads a request; the Studio plugin receives the one pending job through its authenticated heartbeat and submits the result with a one-job result capability. Both request and completed result are bound to the active Studio session. Duplicate IDs are rejected, only one inspection may be pending, at most 32 jobs are retained, pending jobs expire after 30 seconds, and completed results expire after 60 seconds.
+ 
+ The Studio plugin performs a breadth-first walk beginning at `Workspace`, collecting only depths one and two. It stops traversal/collection at the depth boundary, 32 records, a 14 KiB serialized snapshot, or a 20-second work budget; it does not traverse the entire Workspace and truncate afterward. A `truncated` flag marks depth-boundary, record/size, and privacy-filter omissions. The server and extension enforce the exact snapshot shape, sequential temporary IDs (`o1`, `o2`, …), parent links, count, object and property limits, and a 14 KiB serialized snapshot cap; inspection HTTP bodies/results are capped at 16 KiB. A depth-two record requires `truncated=true`. Records contain names, class names, depth, and parent IDs. BaseParts alone may include `Position`, `Size`, RGB `Color`, `Material`, `Anchored`, and `CanCollide`. No script source, arbitrary properties, attributes, player data, or other services are read. Top-level Models with a direct Humanoid (character-like models) are excluded with their descendants to avoid collecting avatar names/parts; this uses Workspace structure only and does not query the Players service. Snapshot-local IDs are temporary references within one result, not stable Roblox identifiers.
+ 
+-The extension validates and displays the result in a bounded preview. A separate explicit button can append it to Arena Direct’s composer as an **unsent draft**; it only updates the composer textarea and never invokes send. Tests exercise schema/limits, server authentication/session/lifecycle behavior, and the extension draft wiring. These are Node tests, not a Roblox Studio runtime test; user manual verification is still required.
++The extension validates and displays the result in a bounded preview. A separate explicit button can append it to Arena Direct’s composer as an **unsent draft**; it only updates the composer textarea and never invokes send. Tests exercise schema/limits, server authentication/session/lifecycle behavior, and the extension draft wiring. These are Node tests, not a Roblox Studio runtime test. The user reports a successful Windows read-only inspection; it was not independently reproduced in this coding environment.
+ 
+ ## Endpoints
+ 
+@@ -47,7 +53,7 @@ The extension validates and displays the result in a bounded preview. A separate
+ - `POST /v1/session/register`: `CONNECTOR_TOKEN`; creates/replaces the active session.
+ - `POST /v1/session/heartbeat`: `CONNECTOR_TOKEN`; strict overview plus one pending/previously approved operation for Studio UI.
+ - `GET /v1/project/overview`: `CONNECTOR_TOKEN`; latest overview from the live session.
+-- `POST /v1/operations`: `CONNECTOR_EXTENSION_TOKEN`; exact typed `create_test_folder` or `create_part` request only.
++- `POST /v1/operations`: `CONNECTOR_EXTENSION_TOKEN`; exact typed `create_test_folder`, `create_part`, or `create_model` request only.
+ - `POST /v1/inspections`, `GET /v1/inspections/:id`: `CONNECTOR_EXTENSION_TOKEN`; separate one-shot read-only request/status.
+ - `POST /v1/inspections/:id/result`: `CONNECTOR_TOKEN` plus the inspection result capability; strict bounded snapshot submission.
+ - `GET /v1/extension/status`, `GET /v1/operations/:id`: extension token; minimal status/result, never the approval capability.
+@@ -67,4 +73,4 @@ Roblox Studio has an official local stdio MCP server. ZeroScript's bridge launch
+ 
+ ## Failure and persistence
+ 
+-Plugin heartbeat cadence is five seconds; server staleness is 15 seconds. Each operation expires after 60 seconds and the in-memory request records are bounded. Server restart clears session/command state. A failed plugin result report may be retried while the same Studio session and approved request are live; the request-ID attribute prevents creating a duplicate Folder. A server or Studio restart during a request still requires manual verification/recovery and is not presented as durable job processing.
++Plugin heartbeat cadence is five seconds; server staleness is 15 seconds. Each operation expires after 60 seconds and the in-memory request records are bounded. Server restart clears session/command state. A failed plugin result report may be retried while the same Studio session and approved request are live; the request-ID attribute and full Model property verification prevent duplicate Folder, Part, or Model creation. A server or Studio restart during a request still requires manual verification/recovery and is not presented as durable job processing.
+diff --git a/docs/development.md b/docs/development.md
+index 6d02e66..a806c28 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -10,12 +10,7 @@ git status --short --branch
+ git branch --show-current
+ ```
+ 
+-Review any local changes before updating; do not use reset/checkout to discard them. When the worktree is clean, fast-forward only the Arena branch:
+-
+-```powershell
+-git pull --ff-only origin arena/73fd4f32-arenarobloxconnecter
+-npm test
+-```
++Review all local and untracked changes before updating; do not reset, clean, checkout, pull, or merge blindly. The remote-ahead commit inspected for this update contains only the Phase 6A transfer artifact, not `create_model`. The bounded Model source is supplied by `transfer/create-model.patch`, based on the exact Phase 6A file set documented in `transfer/create-model.MANIFEST.txt`. First verify every listed baseline file hash, back up touched local files, inspect the patch, and run `git apply --check transfer/create-model.patch`. Apply only if the hashes match and the check succeeds; otherwise stop and resolve differences manually. Never use a blanket replacement.
+ 
+ ## Configure and start the loopback service
+ 
+@@ -45,15 +40,15 @@ Do not print, commit, or paste either secret into Arena. The Studio token is ent
+ 
+ ## Update/install the Studio plugin
+ 
+-Open `studio-plugin/ArenaRobloxConnector.plugin.lua` and replace the complete source of the existing local plugin, then **Plugins → Save as Local Plugin**. Open the **Arena Connector** widget, enter the matching `CONNECTOR_TOKEN`, and click **Connect / refresh overview**. Confirm the session and read-only overview are live. The widget should also show that every requested mutation needs explicit approval. Inspection is read-only and does not use this approval control.
++Do not overwrite the installed plugin source wholesale. Close Studio, locate the existing local plugin source, and make a timestamped backup outside the active Plugins folder. Compare it with `studio-plugin/ArenaRobloxConnector.plugin.lua`; preserve the existing `string.sub(currentSession, 1, 8)` session-label guard. Only after reviewing the diff and confirming the updated source retains that guard and adds `MODEL_STAGING_NAME`, `modelMatches`, and the complete Model approval/create flow should you update the active local plugin. Reload it in Studio, retain the existing Studio token, and click **Connect / refresh overview**. Confirm the session and read-only overview are live; this does not prove Model mutation works.
+ 
+-When a command is pending, the plugin widget shows the Folder name and fixed target `Workspace`, with **Approve Folder** and **Reject** buttons. Approve only a request you intended. Rejecting or letting it expire must not create an instance.
++The plugin preview for `create_model` must show `Workspace/ArenaConnectorStaging`, the Model name, all 2–4 Part specifications, and the single **Approve Model** / **Reject** controls. Approve only a request you intentionally initiated. Rejecting or letting it expire must not create the Model.
+ 
+ ## Load the Manifest V3 extension
+ 
+ 1. Open `chrome://extensions` (Chrome) or `edge://extensions` (Edge) and enable Developer mode.
+-2. Choose **Load unpacked** and select the repository's `extension` folder.
+-3. Open the extension popup and paste the clipboard value created above into **Extension token**, then **Save token**. Use the popup's **Check connector** button to verify loopback reachability and Studio status.
++2. If this extension is already loaded unpacked, keep the same entry and path; back up the extension source folder before changing it. Reload that existing entry after applying the verified source patch rather than removing it or loading a second copy.
++3. Keep the existing extension token; do not rotate it during this update. Use **Check connector** to verify loopback reachability and Studio status.
+ 4. Navigate to Arena Direct (`https://arena.ai/text/direct`) and confirm the extension panel says Arena Direct is active. Turn on **Enable Arena Direct handoff**. No handoff is active by default.
+ 5. The extension visibly appends its public command-format instruction to each outgoing prompt while enabled. Review the appended text in the composer; it contains no secret. Do not enable it in Battle, Side-by-Side, Agent, Search, or other modes.
+ 
+@@ -61,7 +56,7 @@ If Chrome/Edge asks for access to the Arena site or the local connector, grant o
+ 
+ ## Phase 4B/5A Windows verification baseline and regression checklist
+ 
+-The coding workspace has no live Arena page or Windows Studio runtime. The user has nevertheless confirmed the Windows baseline: `create_test_folder` succeeded; `create_part` approval created the exact requested Part, rejection created nothing, duplicate-name refusal preserved the original, and a Folder regression succeeded. Use the checklist below if repeating the integration test after local updates:
++The coding workspace has no live Arena page or Windows Studio runtime. The user has confirmed the Windows baseline: `create_test_folder` succeeded; `create_part` approval created the exact requested Part, rejection created nothing, duplicate-name refusal preserved the original, a Folder regression succeeded, and read-only Workspace inspection succeeded. The Model implementation has not been tested in Roblox Studio. Use the checklist below if repeating the integration test after local updates:
+ 
+ 1. Run `npm test`; confirm the Node server and Studio plugin are connected.
+ 2. In Arena Direct, enable the handoff. Ask for a normal answer that does not request a Studio change. Confirm no operation is queued.
+@@ -90,9 +85,9 @@ Manual Studio checklist after updating the local plugin:
+ 4. Confirm the plugin source’s pending-operation gate calls `validOperationName` before either displaying a request or recovering an approved one. Do not weaken the production server to inject malformed requests. Testing rejection of malformed heartbeat data at runtime would require a separate, isolated test harness and is not covered by this prototype.
+ 
+ 
+-## Phase 6A one-shot Workspace inspection (manual Studio runtime test required)
++## Phase 6A one-shot Workspace inspection (user reports Windows runtime success)
+ 
+-Node tests validate the server lifecycle, schema, authentication/session binding, expiration, duplicate IDs, byte/object limits, truncation contract, and extension draft wiring. They do **not** run Roblox Studio or the Luau plugin. After updating the plugin and reloading the unpacked extension:
++Node tests validate the server lifecycle, schema, authentication/session binding, expiration, duplicate IDs, byte/object limits, truncation contract, and extension draft wiring. They do **not** run Roblox Studio or the Luau plugin. The user reports that Windows read-only inspection succeeded; this was not independently reproduced in the coding environment. After a safe source update and plugin/extension reload:
+ 
+ 1. Confirm the connector is loopback-only, both credentials remain separate, and the Studio plugin is connected with a live heartbeat. Open Arena Direct and enable the extension handoff.
+ 2. Click **Inspect Workspace** once. Confirm the Studio plugin reports read-only inspection, then the extension displays a result with request ID, capture time, count, temporary IDs/parent links, and truncation status. Confirm depth is at most two and there are no more than 32 objects.
+diff --git a/docs/research.md b/docs/research.md
+index b2e5b20..5a1a7a5 100644
+--- a/docs/research.md
++++ b/docs/research.md
+@@ -45,7 +45,7 @@ Arena Agent Mode remains a separate, unverified path: this session cannot call t
+ 
+ The Node connector remains loopback-only at `127.0.0.1:4317`. Phase 3 overview/status routes use `CONNECTOR_TOKEN`; extension enqueue/status routes use a distinct `CONNECTOR_EXTENSION_TOKEN`. Session and operation state are in memory. The heartbeat is five seconds; session expiry is 15 seconds; operation approval expires in 60 seconds. The read-only overview remains limited to allowlisted service class/direct-child counts plus place/universe IDs and `IsStudio`.
+ 
+-The only mutation is `create_test_folder`, with a bounded name under `Workspace`. The Studio plugin—not the browser extension—requires explicit approval and performs the `Instance.new("Folder")` operation. There is no arbitrary Luau/JavaScript execution, shell, filesystem access, Part creation, relay, or automatic assistant follow-up.
++At the time of this Phase 4B research, the only mutation was `create_test_folder`, with a bounded name under `Workspace`. Later source also adds constrained Part and Model operations. The Studio plugin—not the browser extension—requires explicit approval and performs the `Instance.new("Folder")` operation. At that Phase 4B baseline there was no arbitrary Luau/JavaScript execution, shell, filesystem access, Part creation, relay, or automatic assistant follow-up. Later typed Part/Model operations remain allowlisted and do not add code execution or automatic follow-up.
+ 
+ 
+ ## Later implementation update
+diff --git a/docs/security.md b/docs/security.md
+index 3642351..ba50ed2 100644
+--- a/docs/security.md
++++ b/docs/security.md
+@@ -11,9 +11,9 @@
+ ## Phase 4B mutation boundary
+ 
+ - The extension is restricted to Arena Direct/conversation URLs and loopback connector origin. The worker accepts only its own content-script messages from `https://arena.ai/text/*` or `/c/*`, validates the exact operation and UUID, and never exposes token data to the page context. The extension's optional prompt suffix contains only the schema and explicit instruction that user approval is required.
+-- The content script reads only new assistant response `<pre>` blocks after the user enables the feature, and only when the block is visibly rendered (not hidden/ARIA-hidden and intersecting the viewport). Repeated references to the same node are deduplicated; nested nodes collapse only when their parsed typed command is exactly equal. Distinct visible commands and conflicting nested commands fail closed. It waits for the response text and code-block/render signature to remain stable after generation ends. It extracts a single bounded delimited JSON command; it sends only `{requestId, operation, name}`. It does not upload a transcript, user prompt, model name, unrelated DOM, or other page data.
+-- The server extension token can enqueue and inspect a typed command, but it cannot call the Studio decision/result routes. Those require the separate Studio token and an operation-specific approval capability delivered only in the authenticated Studio heartbeat. The queue rejects duplicate IDs, expires after 60 seconds, is bounded, and requires an active Studio heartbeat.
+-- The Studio plugin independently validates the operation name before displaying a pending request: it must be a nonempty string of at most 40 characters, already trimmed, containing only ASCII letters, digits, spaces, `_`, or `-`. It does not normalize invalid names. The Studio plugin displays the exact validated operation values and fixed `Workspace` target, then requires an explicit Approve or Reject click for every mutation. `create_test_folder` creates exactly one Folder. `create_part` creates exactly one basic Part with bounded name, position, size, integer RGB, allowlisted material, `Anchored`, and `CanCollide`; it exposes no parent/class/rotation selection. Both use a request-ID attribute for safe retry detection and reject name collisions without overwriting. No assistant-provided JS/Lua, arbitrary instance paths, scripts, or other operations are accepted.
++- The content script reads only new assistant response `<pre>` blocks after the user enables the feature, and only when the block is visibly rendered (not hidden/ARIA-hidden and intersecting the viewport). Repeated references to the same node are deduplicated; nested nodes collapse only when their parsed typed command is exactly equal. Distinct visible commands and conflicting nested commands fail closed. It waits for the response text and code-block/render signature to remain stable after generation ends. It extracts a single bounded delimited JSON command; it sends only the validated typed request fields plus `requestId` (including the bounded `parts` array for a Model). It does not upload a transcript, user prompt, model name, unrelated DOM, or other page data.
++- The server extension token can enqueue one of the three typed allowlisted mutations or initiate/read a separate bounded inspection, but it cannot call the Studio decision/result routes. Those require the separate Studio token and an operation-specific approval capability delivered only in the authenticated Studio heartbeat. The queue rejects duplicate IDs, expires after 60 seconds, is bounded, and requires an active Studio heartbeat.
++- The Studio plugin independently validates the operation name before displaying a pending request: it must be a nonempty string of at most 40 characters, already trimmed, containing only ASCII letters, digits, spaces, `_`, or `-`. It does not normalize invalid names. The plugin displays exact validated values and requires an explicit Approve or Reject click for every mutation. `create_test_folder` creates one Folder; `create_part` creates one bounded basic Part; `create_model` creates one Model at the fixed `Workspace/ArenaConnectorStaging` target with 2–4 uniquely named ordinary anchored Parts, bounded transforms/colors/materials, and a maximum 128-stud aggregate extent per axis. A single approval covers the full Model preview. Request-ID attributes and full property checks support retry reconciliation; collisions never overwrite or rename. No assistant-provided JS/Lua, arbitrary paths, scripts, or other operations are accepted.
+ - Result delivery is a minimal operation status/name. The extension may place that status into an Arena composer draft only after a user click; it never auto-sends a success claim.
+ - Server state is in-memory; restart loses session, queue, and result status. The prototype does not promise durable recovery across server/Studio restarts.
+ 
+@@ -28,4 +28,4 @@
+ 
+ The Arena DOM selectors and response-completion signal come from a third-party provider that reports validation on Arena Direct in June 2026. This agent had no live browser/DOM to verify the October 2026 page, and the local-LAN permission behavior varies by browser. DOM changes may make the feature stop detecting responses; fail-closed behavior should prevent fallback to broad scraping. Verify the actual browser path before trusting it. The extension's local token is not encrypted, and a compromised browser profile/extension or local machine is outside this prototype's protection boundary.
+ 
+-Windows verification is complete for the Phase 4B Folder and Phase 5A Part paths: approval created the exact Part, rejection created nothing, duplicate-name refusal preserved the original, and Folder regression passed. Phase 6A has only code/Node-test coverage so far; the user must manually verify the Studio plugin runtime. No public listener, CORS-based trust, remote relay, shell, filesystem operation, arbitrary Luau execution, or automatic project mutation without Studio approval is included.
++Windows verification is complete for the Phase 4B Folder and Phase 5A Part paths: approval created the exact Part, rejection created nothing, duplicate-name refusal preserved the original, and Folder regression passed. Phase 6A is covered by code/Node tests, and the user reports that Windows read-only inspection succeeded; that runtime result was not independently reproduced in this coding environment. The Model mutation path remains untested in Studio. No public listener, CORS-based trust, remote relay, shell, filesystem operation, arbitrary Luau execution, or automatic project mutation without Studio approval is included.
+diff --git a/extension/command-parser.js b/extension/command-parser.js
+index d3b90b5..7638eaa 100644
+--- a/extension/command-parser.js
++++ b/extension/command-parser.js
+@@ -3,7 +3,7 @@
+   const START = 'BEGIN_ARENA_ROBLOX_COMMAND';
+   const END = 'END_ARENA_ROBLOX_COMMAND';
+   const MAX_TEXT = 200_000;
+-  const MAX_BLOCK = 1_024;
++  const MAX_BLOCK = 4_096;
+   const MAX_NAME = 40;
+   const MATERIALS = Object.freeze(['Plastic', 'SmoothPlastic', 'Wood', 'WoodPlanks', 'Concrete', 'Brick', 'Metal', 'Grass', 'Ice', 'Glass', 'Neon', 'Sand', 'Slate', 'Marble']);
+   function validName(name) {
+@@ -15,12 +15,40 @@
+       && Object.keys(value).sort().join(',') === 'x,y,z'
+       && ['x', 'y', 'z'].every(k => Number.isFinite(value[k]) && value[k] >= min && value[k] <= max && (!integer || Number.isInteger(value[k])));
+   }
++  function validatePart(part) {
++    if (!part || typeof part !== 'object' || Array.isArray(part)
++      || Object.keys(part).sort().join(',') !== 'canCollide,color,material,name,position,size'
++      || !validName(part.name) || !vector(part.position, -10000, 10000)
++      || !vector(part.size, 0.1, 64) || !vector(part.color, 0, 255, true)
++      || !MATERIALS.includes(part.material) || typeof part.canCollide !== 'boolean') return null;
++    return { name: part.name, position: { ...part.position }, size: { ...part.size }, color: { ...part.color }, material: part.material, canCollide: part.canCollide };
++  }
++  function validModelParts(parts) {
++    if (!Array.isArray(parts) || parts.length < 2 || parts.length > 4) return false;
++    const names = new Set();
++    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
++    for (const raw of parts) {
++      const p = validatePart(raw);
++      if (!p || names.has(p.name)) return false;
++      names.add(p.name);
++      for (let i = 0; i < 3; i++) {
++        const axis = ['x', 'y', 'z'][i];
++        min[i] = Math.min(min[i], p.position[axis] - p.size[axis] / 2);
++        max[i] = Math.max(max[i], p.position[axis] + p.size[axis] / 2);
++      }
++    }
++    return max.every((v, i) => v - min[i] <= 128);
++  }
+   function validateCommand(value) {
+     if (!value || typeof value !== 'object' || Array.isArray(value) || !validName(value.name)) return null;
+     if (value.operation === 'create_test_folder') {
+       if (Object.keys(value).sort().join(',') !== 'name,operation') return null;
+       return { operation: value.operation, name: value.name };
+     }
++    if (value.operation === 'create_model') {
++      if (Object.keys(value).sort().join(',') !== 'name,operation,parts' || !validModelParts(value.parts)) return null;
++      return { operation: value.operation, name: value.name, parts: value.parts.map(validatePart) };
++    }
+     if (value.operation !== 'create_part' || Object.keys(value).sort().join(',') !== 'anchored,canCollide,color,material,name,operation,position,size') return null;
+     if (!vector(value.position, -10000, 10000) || !vector(value.size, 0.1, 512)
+       || !vector(value.color, 0, 255, true) || !MATERIALS.includes(value.material)
+diff --git a/extension/content.js b/extension/content.js
+index a641f32..ab86183 100644
+--- a/extension/content.js
++++ b/extension/content.js
+@@ -5,14 +5,15 @@
+   if (!P || !INSPECTION) return;
+   const INSTRUCTION = [
+     'Arena Roblox Connector handoff format (request only; it is not authorization):',
+-    'Answer normally. If and only if I explicitly request a test Folder or one basic Part, include exactly one fenced JSON command. Put exactly one JSON object between the marker lines; do not include both examples. Never output code or any other operation.',
++    'Answer normally. If and only if I explicitly request one supported test Folder, basic Part, or small Model, include exactly one fenced JSON command. Put exactly one JSON object between the marker lines; do not include multiple commands or arbitrary code.',
+     'Use these exact marker lines around your single JSON object:',
+     P.START,
+     P.END,
+     'Folder schema example: {"operation":"create_test_folder","name":"ArenaTest"}',
+     'Part schema example: {"operation":"create_part","name":"ArenaPlatform","position":{"x":0,"y":5,"z":0},"size":{"x":12,"y":1,"z":12},"color":{"x":80,"y":160,"z":220},"material":"SmoothPlastic","anchored":true,"canCollide":true}',
+-    'The only supported materials are Plastic, SmoothPlastic, Wood, WoodPlanks, Concrete, Brick, Metal, Grass, Ice, Glass, Neon, Sand, Slate, and Marble. Position components must be finite numbers from -10000 to 10000; size components finite numbers from 0.1 to 512; RGB components integers from 0 to 255. Use booleans for anchored and canCollide.',
+-    'A Folder or one basic Part will be created directly under Workspace only after I approve it in the Roblox Studio connector panel. Do not claim it was created before the connector reports success.'
++    'Model schema: {"operation":"create_model","name":"ArenaProp","parts":[{"name":"Base","position":{"x":0,"y":1,"z":0},"size":{"x":4,"y":1,"z":4},"color":{"x":80,"y":160,"z":220},"material":"SmoothPlastic","canCollide":true},{"name":"Top","position":{"x":0,"y":3,"z":0},"size":{"x":2,"y":2,"z":2},"color":{"x":220,"y":160,"z":80},"material":"Wood","canCollide":true}]}',
++    'Model: 2–4 uniquely named ordinary Parts. Part fields are exactly name, position, size, color, material, canCollide; Parts are always anchored. Position components are finite numbers in [-10000,10000]; create_model size components are in [0.1,64]; total bounding extent is at most 128 studs per axis; RGB components are integers 0–255. Materials are Plastic, SmoothPlastic, Wood, WoodPlanks, Concrete, Brick, Metal, Grass, Ice, Glass, Neon, Sand, Slate, Marble.',
++    'A Folder or Part is created under Workspace; a Model is created under Workspace/ArenaConnectorStaging. Every mutation needs one explicit Studio approval. Never claim creation before connector success is reported.'
+   ].join('\n');
+   const host = document.createElement('div');
+   host.id = 'arena-roblox-connector-extension';
+@@ -35,7 +36,7 @@
+   status.className = 'status';
+   const note = document.createElement('div');
+   note.className = 'small';
+-  note.textContent = 'Only two allowlisted mutations are supported; each requires Studio approval. Workspace inspection is read-only and user-initiated. No chat history is sent to the connector.';
++  note.textContent = 'Three typed mutations are allowlisted: create_test_folder, create_part, and create_model; each requires Studio approval. Models go only under Workspace/ArenaConnectorStaging. Workspace inspection is read-only and user-initiated. No chat history is sent to the connector.';
+   const inspectButton = document.createElement('button');
+   inspectButton.className = 'inspect';
+   inspectButton.type = 'button';
+@@ -224,10 +225,11 @@
+     pollInspection(requestId, Date.now() + 32_000);
+   }
+   function statusFor(command, requestId) {
++    const target = command.operation === 'create_model' ? `Workspace/ArenaConnectorStaging/${command.name}` : `Workspace/${command.name}`;
+     const labels = {
+-      pending: `Queued for Studio approval: Workspace/${command.name}.`,
+-      approved: `Approved in Studio; applying Workspace/${command.name}…`,
+-      completed: `Studio reports: created Workspace/${command.name}.`,
++      pending: `Queued for Studio approval: ${target}.`,
++      approved: `Approved in Studio; applying ${target}…`,
++      completed: `Studio reports: created and verified ${target}.`,
+       rejected: `Studio reports: rejected or not created. ${command.result?.message || ''}`,
+       expired: 'Request expired before a decision; no change was made.',
+     };
+@@ -250,7 +252,8 @@
+   }
+   async function submitCommand(command) {
+     const requestId = uuid();
+-    renderStatus(`Structured request detected: ${command.operation === 'create_part' ? 'create Part' : 'create Folder'} \"${command.name}\". Submitting only the typed command for Studio approval…`);
++    const kind = command.operation === 'create_part' ? 'create Part' : command.operation === 'create_model' ? `create Model (${command.parts.length} Parts)` : 'create Folder';
++    renderStatus(`Structured request detected: ${kind} \"${command.name}\". Submitting only the typed command for Studio approval…`);
+     const result = await chrome.runtime.sendMessage({ type: 'submit_command', requestId, command });
+     if (!result?.ok) {
+       renderStatus(`Not submitted: ${result?.error || 'connector unavailable'}. No Studio change was made.`);
+diff --git a/extension/popup.html b/extension/popup.html
+index bd71f01..25863e7 100644
+--- a/extension/popup.html
++++ b/extension/popup.html
+@@ -19,7 +19,7 @@
+ </head>
+ <body>
+   <h1>Arena Roblox Connector</h1>
+-  <p>Supports only <b>create_test_folder</b> and <b>create_part</b>. Every mutation is approved in Roblox Studio.</p>
++  <p>Supports <b>create_test_folder</b>, <b>create_part</b>, and <b>create_model</b>. Every mutation is approved in Roblox Studio; Models use the fixed <code>Workspace/ArenaConnectorStaging</code> destination.</p>
+   <label for="token">Extension token</label>
+   <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="CONNECTOR_EXTENSION_TOKEN">
+   <button id="save">Save token</button><button class="secondary" id="check">Check connector</button>
+diff --git a/server/index.js b/server/index.js
+index 5955117..c2cadb8 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -62,16 +62,38 @@ function validRequestId(value) {
+   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+ }
+ function safeOperation(command) {
+-  const fields = command.operation === 'create_part' ? { position: command.position, size: command.size, color: command.color, material: command.material, anchored: command.anchored, canCollide: command.canCollide } : {};
++  const fields = command.operation === 'create_part'
++    ? { position: command.position, size: command.size, color: command.color, material: command.material, anchored: command.anchored, canCollide: command.canCollide }
++    : command.operation === 'create_model' ? { parts: command.parts } : {};
+   return { requestId: command.requestId, operation: command.operation, name: command.name, ...fields, status: command.status, expiresAt: new Date(command.expiresAt).toISOString() };
+ }
+ function validVector(value, min, max, integer = false) {
+   return !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === 'x,y,z'
+     && ['x','y','z'].every(k => typeof value[k] === 'number' && Number.isFinite(value[k]) && value[k] >= min && value[k] <= max && (!integer || Number.isInteger(value[k])));
+ }
++function validModelParts(parts) {
++  if (!Array.isArray(parts) || parts.length < 2 || parts.length > 4) return false;
++  const names = new Set();
++  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
++  for (const part of parts) {
++    if (!part || typeof part !== 'object' || Array.isArray(part)
++      || Object.keys(part).sort().join(',') !== 'canCollide,color,material,name,position,size'
++      || !validName(part.name) || !validVector(part.position, -10000, 10000)
++      || !validVector(part.size, 0.1, 64) || !validVector(part.color, 0, 255, true)
++      || !MATERIALS.has(part.material) || typeof part.canCollide !== 'boolean' || names.has(part.name)) return false;
++    names.add(part.name);
++    for (let i = 0; i < 3; i++) {
++      const axis = ['x', 'y', 'z'][i];
++      min[i] = Math.min(min[i], part.position[axis] - part.size[axis] / 2);
++      max[i] = Math.max(max[i], part.position[axis] + part.size[axis] / 2);
++    }
++  }
++  return max.every((v, i) => v - min[i] <= 128);
++}
+ function validOperation(body) {
+   if (!validName(body.name)) return false;
+   if (body.operation === 'create_test_folder') return Object.keys(body).sort().join(',') === 'name,operation,requestId';
++  if (body.operation === 'create_model') return Object.keys(body).sort().join(',') === 'name,operation,parts,requestId' && validModelParts(body.parts);
+   return body.operation === 'create_part' && Object.keys(body).sort().join(',') === 'anchored,canCollide,color,material,name,operation,position,requestId,size'
+     && validVector(body.position, -10000, 10000) && validVector(body.size, 0.1, 512) && validVector(body.color, 0, 255, true)
+     && MATERIALS.has(body.material) && typeof body.anchored === 'boolean' && typeof body.canCollide === 'boolean';
+@@ -248,7 +270,7 @@ function createServer({ token = TOKEN, extensionToken = EXTENSION_TOKEN, now = D
+           requestId: body.requestId,
+           operation: body.operation,
+           name: body.name,
+-          ...(body.operation === 'create_part' ? { position: body.position, size: body.size, color: body.color, material: body.material, anchored: body.anchored, canCollide: body.canCollide } : {}),
++          ...(body.operation === 'create_part' ? { position: body.position, size: body.size, color: body.color, material: body.material, anchored: body.anchored, canCollide: body.canCollide } : body.operation === 'create_model' ? { parts: body.parts } : {}),
+           sessionId: session.id,
+           createdAt,
+           expiresAt: createdAt + commandTtlMs,
+@@ -322,7 +344,7 @@ function createServer({ token = TOKEN, extensionToken = EXTENSION_TOKEN, now = D
+             sessionId: session ? session.id : null,
+             lastHeartbeatAt: session ? new Date(session.lastSeenAt).toISOString() : null,
+           },
+-          capabilities: ['status', 'project.overview', ...(extensionToken ? ['operation.create_test_folder', 'operation.create_part'] : [])],
++          capabilities: ['status', 'project.overview', ...(extensionToken ? ['operation.create_test_folder', 'operation.create_part', 'operation.create_model'] : [])],
+           message: session ? 'A Studio plugin session is actively heartbeating.' : 'No active Studio plugin session.'
+         });
+       }
+diff --git a/studio-plugin/ArenaRobloxConnector.plugin.lua b/studio-plugin/ArenaRobloxConnector.plugin.lua
+index b9075d5..0ef0c18 100644
+--- a/studio-plugin/ArenaRobloxConnector.plugin.lua
++++ b/studio-plugin/ArenaRobloxConnector.plugin.lua
+@@ -14,6 +14,7 @@ local ALLOWED_SERVICES = {
+     "Workspace", "ReplicatedStorage", "ServerStorage", "ServerScriptService",
+     "StarterGui", "StarterPack", "StarterPlayer", "Lighting", "SoundService",
+ }
++local MODEL_STAGING_NAME = "ArenaConnectorStaging"
+ 
+ local toolbar = plugin:CreateToolbar("Arena Connector")
+ local toggleButton = toolbar:CreateButton("ArenaConnector", "Show connector status", "")
+@@ -150,6 +151,15 @@ local function setApproval(operation, note)
+             approveButton.Text = "Approve Part"
+             local p, z, c = operation.position, operation.size, operation.color
+             approvalLabel.Text = "Arena requests: create Part \"" .. operation.name .. "\" under Workspace\nPosition: (" .. tostring(p.x) .. ", " .. tostring(p.y) .. ", " .. tostring(p.z) .. ") studs\nSize: (" .. tostring(z.x) .. ", " .. tostring(z.y) .. ", " .. tostring(z.z) .. ") studs\nRGB: (" .. tostring(c.x) .. ", " .. tostring(c.y) .. ", " .. tostring(c.z) .. ") | Material: " .. operation.material .. "\nAnchored: " .. tostring(operation.anchored) .. " | CanCollide: " .. tostring(operation.canCollide) .. "\nReview exact properties; approve or reject. Expires shortly."
++        elseif operation.operation == "create_model" then
++            approveButton.Text = "Approve Model"
++            local lines = {"Arena requests: create Model \"" .. operation.name .. "\" under Workspace/ArenaConnectorStaging", "Part count: " .. tostring(#operation.parts)}
++            for _, part in ipairs(operation.parts) do
++                local p, z, c = part.position, part.size, part.color
++                table.insert(lines, "\nPart: " .. part.name .. " | Position: (" .. p.x .. ", " .. p.y .. ", " .. p.z .. ") | Size: (" .. z.x .. ", " .. z.y .. ", " .. z.z .. ") | RGB: (" .. c.x .. ", " .. c.y .. ", " .. c.z .. ") | Material: " .. part.material .. " | CanCollide: " .. tostring(part.canCollide) .. " | Anchored: true")
++            end
++            table.insert(lines, "\nReview the complete Model; one approval creates all Parts.")
++            approvalLabel.Text = table.concat(lines, "\n")
+         else
+             approvalLabel.Text = "Unsupported operation. No change will be made."
+             rejectButton.Visible = false
+@@ -243,33 +253,86 @@ local function reportOperation(operation, token, ok, message, createdName)
+     })
+     return decodeResponse(response, 200)
+ end
++local function modelMatches(model, operation)
++    if not model or model.ClassName ~= "Model" or model.Name ~= operation.name
++        or #model:GetChildren() ~= #operation.parts then return false end
++    for _, expected in ipairs(operation.parts) do
++        local part = model:FindFirstChild(expected.name)
++        if not part or part.ClassName ~= "Part" or #part:GetChildren() ~= 0 or part.Anchored ~= true
++            or part.Position ~= Vector3.new(expected.position.x, expected.position.y, expected.position.z)
++            or part.Size ~= Vector3.new(expected.size.x, expected.size.y, expected.size.z)
++            or part.Color ~= Color3.fromRGB(expected.color.x, expected.color.y, expected.color.z)
++            or part.Material ~= Enum.Material[expected.material] or part.CanCollide ~= expected.canCollide then return false end
++    end
++    return true
++end
+ local function applyApprovedOperation(operation, token)
++    local parent = workspace
++    if operation.operation == "create_model" then
++        parent = workspace:FindFirstChild(MODEL_STAGING_NAME)
++        if parent and not parent:IsA("Folder") then error("Staging target exists but is not a Folder.") end
++    end
+     local existingByRequest = nil
+-    for _, child in ipairs(workspace:GetChildren()) do
+-        if child:GetAttribute("ArenaConnectorRequestId") == operation.requestId then
+-            existingByRequest = child
+-            break
++    local scanRoot = operation.operation == "create_model" and parent or workspace
++    if scanRoot then
++        for _, child in ipairs(scanRoot:GetChildren()) do
++            if child:GetAttribute("ArenaConnectorRequestId") == operation.requestId then existingByRequest = child; break end
+         end
+     end
+     if existingByRequest then
+-        local expectedClass = operation.operation == "create_test_folder" and "Folder" or "Part"
+-        local matches = existingByRequest:IsA(expectedClass) and existingByRequest.Name == operation.name
++        local expectedClass = operation.operation == "create_test_folder" and "Folder" or operation.operation == "create_part" and "Part" or "Model"
++        local matches = existingByRequest.ClassName == expectedClass and existingByRequest.Name == operation.name
+         if matches and operation.operation == "create_part" then
+             matches = existingByRequest.Position == Vector3.new(operation.position.x, operation.position.y, operation.position.z)
+                 and existingByRequest.Size == Vector3.new(operation.size.x, operation.size.y, operation.size.z)
+                 and existingByRequest.Color == Color3.fromRGB(operation.color.x, operation.color.y, operation.color.z)
+                 and existingByRequest.Material == Enum.Material[operation.material]
+                 and existingByRequest.Anchored == operation.anchored and existingByRequest.CanCollide == operation.canCollide
++        elseif matches and operation.operation == "create_model" then
++            matches = modelMatches(existingByRequest, operation)
+         end
+         if matches then
+             reportOperation(operation, token, true, expectedClass .. " already created for this request.", operation.name)
+-            setApproval(nil, "Completed: Workspace/" .. operation.name .. " (retry safely recognized).")
++            setApproval(nil, "Completed: request already exists and matches the approved operation.")
+             return
+         end
+         reportOperation(operation, token, false, "Request marker exists on an unexpected object.", nil)
+         setApproval(nil, "Rejected: request marker did not match the expected object for this request.")
+         return
+     end
++    if operation.operation == "create_model" then
++        if parent and parent:FindFirstChild(operation.name) then
++            reportOperation(operation, token, false, "A staging child with this name already exists.", nil)
++            setApproval(nil, "Not created: a staging child already has that name.")
++            return
++        end
++        local model = Instance.new("Model")
++        model.Name = operation.name
++        for _, spec in ipairs(operation.parts) do
++            local part = Instance.new("Part")
++            part.Name = spec.name
++            part.Position = Vector3.new(spec.position.x, spec.position.y, spec.position.z)
++            part.Size = Vector3.new(spec.size.x, spec.size.y, spec.size.z)
++            part.Color = Color3.fromRGB(spec.color.x, spec.color.y, spec.color.z)
++            part.Material = Enum.Material[spec.material]
++            part.Anchored = true
++            part.CanCollide = spec.canCollide
++            part.Parent = model
++        end
++        if not modelMatches(model, operation) then error("Unparented Model failed property verification.") end
++        if not parent then
++            local stage = Instance.new("Folder")
++            stage.Name = MODEL_STAGING_NAME
++            stage.Parent = workspace
++            parent = stage
++        end
++        model:SetAttribute("ArenaConnectorRequestId", operation.requestId)
++        model.Parent = parent
++        if model.Parent ~= parent or not modelMatches(model, operation) then error("Created Model failed Workspace read-back verification.") end
++        reportOperation(operation, token, true, "Created and verified Model under Workspace/" .. MODEL_STAGING_NAME .. ".", operation.name)
++        setApproval(nil, "Completed: created and verified Workspace/" .. MODEL_STAGING_NAME .. "/" .. operation.name .. ".")
++        return
++    end
+     if workspace:FindFirstChild(operation.name) then
+         reportOperation(operation, token, false, "A Workspace child with this name already exists.", nil)
+         setApproval(nil, "Not created: a Workspace child already has that name.")
+@@ -327,7 +390,11 @@ local function decide(operation, decision)
+             end
+         end)
+         if not ok then
+-            setApproval(operation, "Approval request failed: " .. tostring(errorMessage))
++            if decision == "approve" and operation.operation == "create_model" then
++                setApproval(nil, "Approval was recorded, but creation/result delivery could not be confirmed. Check Workspace/ArenaConnectorStaging before retrying; the same request ID will be reconciled. " .. tostring(errorMessage))
++            else
++                setApproval(operation, "Approval request failed: " .. tostring(errorMessage))
++            end
+         end
+         actionBusy = false
+         if currentRequest then
+@@ -487,7 +554,7 @@ local function refreshCycle()
+             end
+             local pending = heartbeat.pendingOperation
+             if pending ~= nil then
+-                if type(pending.requestId) ~= "string" or (pending.operation ~= "create_test_folder" and pending.operation ~= "create_part")
++                if type(pending.requestId) ~= "string" or (pending.operation ~= "create_test_folder" and pending.operation ~= "create_part" and pending.operation ~= "create_model")
+                     or not validOperationName(pending.name)
+                     or (pending.status ~= "pending" and pending.status ~= "approved")
+                     or type(pending.approvalToken) ~= "string" or #pending.approvalToken < 20 then
+@@ -511,6 +578,43 @@ local function refreshCycle()
+                         or type(pending.anchored) ~= "boolean" or type(pending.canCollide) ~= "boolean" then
+                         error("Connector returned invalid Part properties.")
+                     end
++                elseif pending.operation == "create_model" then
++                    local function vectorInRange(value, low, high, integer)
++                        if type(value) ~= "table" then return false end
++                        local count = 0
++                        for key in pairs(value) do if key == "x" or key == "y" or key == "z" then count += 1 else return false end end
++                        if count ~= 3 then return false end
++                        for _, axis in ipairs({"x", "y", "z"}) do
++                            local n = value[axis]
++                            if type(n) ~= "number" or n ~= n or n == math.huge or n == -math.huge or n < low or n > high or (integer and n % 1 ~= 0) then return false end
++                        end
++                        return true
++                    end
++                    local seen, mins, maxs = {}, {math.huge, math.huge, math.huge}, {-math.huge, -math.huge, -math.huge}
++                    local axes = {"x", "y", "z"}
++                    local allowed = {Plastic=true, SmoothPlastic=true, Wood=true, WoodPlanks=true, Concrete=true, Brick=true, Metal=true, Grass=true, Ice=true, Glass=true, Neon=true, Sand=true, Slate=true, Marble=true}
++                    if type(pending.parts) ~= "table" or #pending.parts < 2 or #pending.parts > 4 then error("Connector returned an invalid Model part list.") end
++                    local partCount = 0
++                    for key in pairs(pending.parts) do
++                        if type(key) ~= "number" or key % 1 ~= 0 or key < 1 or key > #pending.parts then error("Connector returned a malformed Model parts array.") end
++                        partCount += 1
++                    end
++                    if partCount ~= #pending.parts then error("Connector returned a sparse Model parts array.") end
++                    for _, part in ipairs(pending.parts) do
++                        local partKeys, allowedKeys = 0, {name=true, position=true, size=true, color=true, material=true, canCollide=true}
++                        if type(part) == "table" then for key in pairs(part) do if not allowedKeys[key] then error("Connector returned an extra Model Part field.") end; partKeys += 1 end end
++                        if type(part) ~= "table" or partKeys ~= 6 or type(part.name) ~= "string" or not validOperationName(part.name) or seen[part.name]
++                            or not vectorInRange(part.position, -10000, 10000, false) or not vectorInRange(part.size, 0.1, 64, false)
++                            or not vectorInRange(part.color, 0, 255, true) or not allowed[part.material] or type(part.canCollide) ~= "boolean" then
++                            error("Connector returned invalid Model Part properties.")
++                        end
++                        seen[part.name] = true
++                        for i, axis in ipairs(axes) do
++                            mins[i] = math.min(mins[i], part.position[axis] - part.size[axis] / 2)
++                            maxs[i] = math.max(maxs[i], part.position[axis] + part.size[axis] / 2)
++                        end
++                    end
++                    for i = 1, 3 do if maxs[i] - mins[i] > 128 then error("Connector returned a Model exceeding the bounding extent limit.") end end
+                 end
+                 if pending.status == "approved" then
+                     recoverApproved(pending, token)
+diff --git a/tests/create-model-plugin.test.js b/tests/create-model-plugin.test.js
+new file mode 100644
+index 0000000..b3311fd
+--- /dev/null
++++ b/tests/create-model-plugin.test.js
+@@ -0,0 +1,25 @@
++'use strict';
++const { test } = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++const source = fs.readFileSync(path.join(__dirname, '../studio-plugin/ArenaRobloxConnector.plugin.lua'), 'utf8');
++
++test('Studio source constructs a Model with ordinary anchored Parts before parenting and verifies read-back', () => {
++  const buildAt = source.indexOf('local model = Instance.new("Model")');
++  const partAt = source.indexOf('local part = Instance.new("Part")', buildAt);
++  const precheckAt = source.indexOf('modelMatches(model, operation)', partAt);
++  const parentAt = source.indexOf('model.Parent = parent', precheckAt);
++  const postcheckAt = source.indexOf('model.Parent ~= parent or not modelMatches(model, operation)', parentAt);
++  assert.ok(buildAt >= 0 && partAt > buildAt && precheckAt > partAt && parentAt > precheckAt && postcheckAt > parentAt);
++  assert.match(source, /part\.Anchored = true/);
++  assert.match(source, /part\.ClassName ~= "Part"/);
++  assert.match(source, /ArenaConnectorRequestId/);
++  assert.match(source, /MODEL_STAGING_NAME = "ArenaConnectorStaging"/);
++});
++
++test('Studio preview includes the fixed target and all requested Part properties; session label guard is retained', () => {
++  assert.match(source, /Workspace\/ArenaConnectorStaging/);
++  for (const field of ['position', 'size', 'color', 'material', 'canCollide']) assert.match(source, new RegExp('part\\.' + field));
++  assert.match(source, /string\.sub\(currentSession, 1, 8\)/);
++});
+diff --git a/tests/extension-parser.test.js b/tests/extension-parser.test.js
+index 4a7b250..c55afb6 100644
+--- a/tests/extension-parser.test.js
++++ b/tests/extension-parser.test.js
+@@ -27,6 +27,34 @@ test('create_part parser accepts the exact bounded schema and rejects malformed
+   ];
+   for (const value of invalid) assert.equal(require('../extension/command-parser.js').validateCommand(value), null);
+ });
++const modelPart = (name, x = 0) => ({ name, position: { x, y: 0, z: 0 }, size: { x: 2, y: 2, z: 2 }, color: { x: 1, y: 2, z: 3 }, material: 'Plastic', canCollide: true });
++test('create_model accepts 2 and 4 ordinary Parts and normalizes the typed request', () => {
++  const { validateCommand } = require('../extension/command-parser.js');
++  for (const parts of [[modelPart('A'), modelPart('B', 3)], [modelPart('A'), modelPart('B', 3), modelPart('C', 6), modelPart('D', 9)]]) {
++    const value = { operation: 'create_model', name: 'Prop', parts };
++    assert.deepEqual(validateCommand(value), value);
++  }
++});
++test('create_model rejects invalid counts, duplicate names, extra/missing fields and unsafe properties', () => {
++  const { validateCommand } = require('../extension/command-parser.js');
++  const base = { operation: 'create_model', name: 'Prop', parts: [modelPart('A'), modelPart('B', 3)] };
++  const invalid = [
++    { ...base, parts: [modelPart('A')] }, { ...base, parts: Array.from({ length: 5 }, (_, i) => modelPart(`P${i}`)) },
++    { ...base, parts: [modelPart('A'), modelPart('A')] }, { ...base, extra: true },
++    { ...base, parent: 'Workspace' }, { ...base, className: 'Script' }, { ...base, code: 'x' },
++    { ...base, parts: [{ ...modelPart('A'), script: 'x' }, modelPart('B')] },
++    { ...base, parts: [{ ...modelPart('A'), canCollide: undefined }, modelPart('B')] },
++    { ...base, parts: [modelPart('A'), { ...modelPart('B'), extra: 1 }] },
++    { ...base, parts: [modelPart('A'), modelPart('B', 130)] },
++    { ...base, parts: [modelPart('A'), { ...modelPart('B'), position: { x: 10001, y: 0, z: 0 } }] },
++    { ...base, parts: [modelPart('A'), { ...modelPart('B'), size: { x: 64.1, y: 2, z: 2 } }] },
++    { ...base, parts: [modelPart('A'), { ...modelPart('B'), color: { x: 1.5, y: 0, z: 0 } }] },
++    { ...base, parts: [modelPart('A'), { ...modelPart('B'), material: 'Air' }] },
++    { ...base, parts: [modelPart('A'), { ...modelPart('B'), canCollide: 'true' }] },
++  ];
++  for (const value of invalid) assert.equal(validateCommand(value), null);
++});
++
+ test('same DOM element referenced twice is counted once, but reports the duplicate reference', () => {
+   const element = {};
+   const parsed = parseVisibleCommandBlocks([
+@@ -107,5 +135,5 @@ test('unsafe names and oversized payloads are rejected', () => {
+     assert.equal(parseCommandBlock(commandText(name)).kind, 'invalid');
+   }
+   assert.equal(parseCommandBlock('x'.repeat(200_001)).error, 'response_too_large');
+-  assert.equal(parseCommandBlock(`${START}\n${'x'.repeat(1025)}\n${END}`).error, 'command_too_large');
++  assert.equal(parseCommandBlock(`${START}\n${'x'.repeat(4097)}\n${END}`).error, 'command_too_large');
+ });
+diff --git a/tests/server.test.js b/tests/server.test.js
+index a827170..72ecfc7 100644
+--- a/tests/server.test.js
++++ b/tests/server.test.js
+@@ -1,6 +1,7 @@
+ 'use strict';
+ const { test } = require('node:test');
+ const assert = require('node:assert/strict');
++const { randomUUID } = require('node:crypto');
+ const { createServer, validInspectionSnapshot, MAX_SNAPSHOT_BYTES, MAX_INSPECTION_HTTP_BYTES } = require('../server');
+ const TOKEN = 'a'.repeat(44);
+ const EXTENSION_TOKEN = 'b'.repeat(48);
+@@ -268,6 +269,74 @@ test('extension preflight is limited to chrome-extension origins', async () => w
+   assert.equal(bad.status, 403);
+ }));
+ 
++const makeModel = (name, parts) => ({ operation: 'create_model', name, parts: parts || [
++  { name: 'Base', position: { x: 0, y: 0, z: 0 }, size: { x: 4, y: 1, z: 4 }, color: { x: 80, y: 160, z: 220 }, material: 'SmoothPlastic', canCollide: true },
++  { name: 'Top', position: { x: 0, y: 2, z: 0 }, size: { x: 2, y: 2, z: 2 }, color: { x: 220, y: 160, z: 80 }, material: 'Wood', canCollide: false },
++] });
++test('create_model accepts bounded 2/4-Part requests and rejects malformed schemas and bounds', async () => withServer(async base => {
++  const sessionId = await register(base); await heartbeat(base, sessionId);
++  const model4 = makeModel('FourParts', [
++    ...makeModel('x').parts,
++    { name: 'Left', position: { x: -4, y: 0, z: 0 }, size: { x: 2, y: 2, z: 2 }, color: { x: 0, y: 0, z: 0 }, material: 'Metal', canCollide: true },
++    { name: 'Right', position: { x: 4, y: 0, z: 0 }, size: { x: 2, y: 2, z: 2 }, color: { x: 255, y: 255, z: 255 }, material: 'Plastic', canCollide: true },
++  ]);
++  for (const [i, model] of [makeModel('TwoParts'), model4].entries()) {
++    const requestId = `c${i + 4}1af39d-6ed0-4cab-9d4f-85ee4dd58106`;
++    const response = await fetch(`${base}/v1/operations`, { method: 'POST', ...extensionJsonRequest({ requestId, ...model }) });
++    assert.equal(response.status, 202);
++    const pending = await (await heartbeat(base, sessionId)).json();
++    assert.equal(pending.pendingOperation.operation, 'create_model');
++    assert.equal(pending.pendingOperation.parts.length, model.parts.length);
++    assert.equal((await fetch(`${base}/v1/operations/${requestId}/decision`, { method: 'POST', ...jsonRequest({ sessionId, approvalToken: pending.pendingOperation.approvalToken, decision: 'reject' }) })).status, 200);
++  }
++  const invalidModels = [
++    makeModel('Few', [makeModel('x').parts[0]]),
++    makeModel('Many', Array.from({ length: 5 }, (_, i) => ({ ...makeModel('x').parts[0], name: `p${i}` }))),
++    makeModel('Dup', [makeModel('x').parts[0], { ...makeModel('x').parts[1], name: 'Base' }]),
++    { ...makeModel('Extra'), parent: 'Workspace' },
++    makeModel('Extent', [makeModel('x').parts[0], { ...makeModel('x').parts[1], position: { x: 130, y: 0, z: 0 } }]),
++    makeModel('Script', [{ ...makeModel('x').parts[0], className: 'Script' }, makeModel('x').parts[1]]),
++  ];
++  for (const model of invalidModels) {
++    const id = randomUUID();
++    assert.equal((await fetch(`${base}/v1/operations`, { method: 'POST', ...extensionJsonRequest({ requestId: id, ...model }) })).status, 400);
++  }
++  const tooLarge = { requestId: randomUUID(), ...makeModel('Large'), padding: 'x'.repeat(9000) };
++  assert.equal((await fetch(`${base}/v1/operations`, { method: 'POST', ...extensionJsonRequest(tooLarge) })).status, 413);
++}));
++
++test('create_model rejection, expiry, stale/replaced sessions and duplicate IDs never authorize mutation', async () => {
++  let now = 1000;
++  await withServer(async base => {
++    const id = 'd31af39d-6ed0-4cab-9d4f-85ee4dd58106';
++    const sessionId = await register(base); await heartbeat(base, sessionId);
++    const post = requestId => fetch(`${base}/v1/operations`, { method: 'POST', ...extensionJsonRequest({ requestId, ...makeModel('Prop') }) });
++    assert.equal((await post(id)).status, 202);
++    assert.equal((await post(id)).status, 409);
++    const pending = (await (await heartbeat(base, sessionId)).json()).pendingOperation;
++    const reject = await fetch(`${base}/v1/operations/${id}/decision`, { method: 'POST', ...jsonRequest({ sessionId, approvalToken: pending.approvalToken, decision: 'reject' }) });
++    assert.equal(reject.status, 200);
++    assert.equal((await (await fetch(`${base}/v1/operations/${id}`, { headers: extensionAuth() })).json()).command.status, 'rejected');
++    const expireId = 'e31af39d-6ed0-4cab-9d4f-85ee4dd58106';
++    assert.equal((await post(expireId)).status, 202);
++    now += 60_001;
++    assert.equal((await (await fetch(`${base}/v1/operations/${expireId}`, { headers: extensionAuth() })).json()).command.status, 'expired');
++    await heartbeat(base, sessionId);
++    const staleId = 'f31af39d-6ed0-4cab-9d4f-85ee4dd58106';
++    assert.equal((await post(staleId)).status, 503);
++    const replacement = await register(base);
++    assert.notEqual(replacement, sessionId);
++    assert.equal((await heartbeat(base, sessionId)).status, 409);
++    await heartbeat(base, replacement);
++    const replacedRequestId = 'a31af39d-6ed0-4cab-9d4f-85ee4dd58106';
++    assert.equal((await post(replacedRequestId)).status, 202);
++    const replacementPending = (await (await heartbeat(base, replacement)).json()).pendingOperation;
++    await register(base); // Replace the session after approval data was delivered.
++    const staleDecision = await fetch(`${base}/v1/operations/${replacedRequestId}/decision`, { method: 'POST', ...jsonRequest({ sessionId: replacement, approvalToken: replacementPending.approvalToken, decision: 'approve' }) });
++    assert.equal(staleDecision.status, 409);
++  }, { now: () => now });
++});
++
+ const inspectionSnapshot = requestId => ({
+   requestId,
+   capturedAt: '2026-10-26T12:00:00.000Z',

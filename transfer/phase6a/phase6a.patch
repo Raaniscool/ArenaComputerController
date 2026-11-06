@@ -1,0 +1,1090 @@
+diff --git a/README.md b/README.md
+index b0ace438a504623a3f860659ab2416ed0e64666b..9d626a7065ecfb129e1f537a94313ded7bf2b33c 100644
+--- a/README.md
++++ b/README.md
+@@ -4,7 +4,7 @@ A local-first, security-focused Arena Direct → loopback connector → Roblox S
+ 
+ ## Current status
+ 
+-**Phase 4B `create_test_folder` completed a successful Windows end-to-end smoke test (Arena Direct → extension → loopback connector → Studio approval → Workspace Folder). Phase 5A `create_part` is implemented and locally tested, but has not yet been verified in a real Studio session.** The MV3 extension watches only new Arena Direct assistant replies, recognizes one delimited `create_test_folder` or `create_part` JSON operation, and submits only that typed request to the loopback server. The existing Studio plugin still reports the Phase 3 read-only overview; it presents a mandatory approval/reject prompt and, after approval, can create exactly one `Folder` under `Workspace` or one constrained `Part` under `Workspace`. No assistant-generated JavaScript or Luau is accepted or executed. The user verified the `create_test_folder` Arena-to-Studio path in a real Windows browser and Studio session. The new `create_part` path has not yet been verified.
++**Phases 4B and 5A are implemented and verified in a Windows Arena Direct → extension → loopback connector → Studio approval → Workspace flow.** The user confirmed approved `create_part` creation with exact properties, rejected requests creating nothing, duplicate-name refusal without changing the existing object, and a Folder regression. **Phase 6A read-only inspection is implemented in code and Node-tested, but its Roblox Studio runtime is awaiting the user’s manual test.** The MV3 extension watches only new Arena Direct assistant replies, recognizes one delimited `create_test_folder` or `create_part` JSON operation, and submits only that typed request to the loopback server. The Studio plugin reports a bounded Phase 3 overview, requires mandatory approval/reject for mutations, and can create exactly one `Folder` or constrained `Part` under `Workspace`. Phase 6A adds a separate on-demand read-only Workspace snapshot path. No assistant-generated JavaScript or Luau is accepted or executed. The user verified the `create_test_folder` Arena-to-Studio path in a real Windows browser and Studio session.
+ 
+ The Arena DOM adapter follows the independently published ZeroScript Free Arena Direct provider (its source describes live validation in June 2026). The current Arena DOM/streaming behavior in October 2026 has not been observed in this environment. The extension fails closed if it cannot confirm Direct mode or find the expected response structure. See [research](docs/research.md) and [manual verification](docs/development.md).
+ 
+@@ -19,10 +19,11 @@ See [docs/development.md](docs/development.md) for the full PowerShell, plugin,
+ - Extension-authenticated `POST /v1/operations` accepts only `create_test_folder` (bounded safe name) or `create_part` (strict bounded fields), each with a UUID request ID; duplicates, oversized payloads, malformed requests, and unsupported operations are rejected.
+ - Studio heartbeat delivers the pending request and a short-lived approval capability only to the authenticated plugin. The plugin must receive an explicit user click before it creates anything. A refusal or expiry makes no change.
+ - After approval, the plugin creates one `Folder` or constrained `Part` under `Workspace`, tagged with the request ID to prevent duplicate creation on retry. The truthful result is shown in the extension panel; an optional button inserts it as an **unsent draft** in Arena for user review.
+-- The extension does not upload conversation history or other page content. Only the parsed operation fields and request ID cross to the local connector.
++- Phase 6A inspection is separate from mutation operations: an explicit extension-panel action requests a breadth-first snapshot to depth two, stopping at 32 objects and a 14 KiB serialized-snapshot cap (with result transport capped at 16 KiB). It contains names/classes, temporary snapshot-local IDs and parent links, and only Position, Size, RGB Color, Material, Anchored, and CanCollide for BaseParts. Script source, arbitrary properties, attributes, player data, and other services are excluded. Top-level Models with a direct Humanoid are omitted with descendants as a character-privacy guard; the plugin does not query the Players service. Depth/record omissions are marked `truncated`; snapshot IDs are temporary and not stable Roblox identifiers. Requests/results expire and are bound to the active Studio session.
++- The extension does not upload conversation history or other page content. Only parsed operation fields and request ID cross for mutations; inspection data is returned only after a user-initiated snapshot request.
+ - No arbitrary script execution, arbitrary instance creation, editing/deletion, filesystem access, public listener, relay, or automatic Arena follow-up is included.
+ 
+-The in-memory session/operation queue clears on server restart. Automated tests cover parser, authentication separation, payload validation, duplicate/expiry behavior, rejection, approval, and result handoff. A green local test suite is not a real Arena/Chrome/Studio integration test.
++The in-memory session/operation queue clears on server restart. Automated tests cover parser, authentication separation, payload validation, mutation and inspection lifecycle, snapshot schema/limits/truncation, session binding, expiry, duplicate IDs, byte caps, and extension draft handoff wiring. A green local test suite is not a real Arena/Chrome/Studio integration test.
+ 
+ ## Test
+ 
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 1776d3a5285929ffdbfbac5f146a74832d625df8..177b7d5ec8639074eb72ee1022bb39198319025d 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -28,9 +28,17 @@ The extension request uses a UUID, an 8 KiB server body cap, a 60-second approva
+ 
+ The result is returned to the extension status panel. The user may click **Draft result in Arena composer** to place the status in an unsent draft; the extension never auto-sends an assistant-visible claim. The result/queue is memory-only and can be lost if the local server restarts.
+ 
+-## Phase 5A: constrained Part building block
++## Phase 5A: constrained Part building block (Windows verification complete)
+ 
+-The extension and server accept one additional typed operation, `create_part`. Its exact JSON fields are `operation`, `name`, `position`, `size`, `color`, `material`, `anchored`, and `canCollide` (plus server `requestId`). `name` is 1–40 characters, trimmed, and limited to ASCII letters, digits, spaces, `_`, and `-`. `position` is `{x,y,z}` with finite numeric components in `[-10000,10000]` studs. `size` is `{x,y,z}` with finite numeric components in `[0.1,512]` studs. `color` is `{x,y,z}` of integer RGB components `[0,255]`. `material` must be one of `Plastic`, `SmoothPlastic`, `Wood`, `WoodPlanks`, `Concrete`, `Brick`, `Metal`, `Grass`, `Ice`, `Glass`, `Neon`, `Sand`, `Slate`, or `Marble`. `anchored` and `canCollide` must be booleans. Extra/missing fields are rejected; no rotation, parent, class selection, scripts, edits, deletes, or multi-instance operations are supported. The plugin approval preview presents the exact values and fixed Workspace parent. Existing names cause a safe failure without overwrite or rename. Automated parser/server tests cover schema validation, queueing, expiry, and capability boundaries. The duplicate-name branch and actual Part creation require a Windows Studio integration retest because the plugin runs only inside Roblox Studio.
++The extension and server accept one additional typed operation, `create_part`. Its exact JSON fields are `operation`, `name`, `position`, `size`, `color`, `material`, `anchored`, and `canCollide` (plus server `requestId`). `name` is 1–40 characters, trimmed, and limited to ASCII letters, digits, spaces, `_`, and `-`. `position` is `{x,y,z}` with finite numeric components in `[-10000,10000]` studs. `size` is `{x,y,z}` with finite numeric components in `[0.1,512]` studs. `color` is `{x,y,z}` of integer RGB components `[0,255]`. `material` must be one of `Plastic`, `SmoothPlastic`, `Wood`, `WoodPlanks`, `Concrete`, `Brick`, `Metal`, `Grass`, `Ice`, `Glass`, `Neon`, `Sand`, `Slate`, or `Marble`. `anchored` and `canCollide` must be booleans. Extra/missing fields are rejected; no rotation, parent, class selection, scripts, edits, deletes, or multi-instance operations are supported. The plugin approval preview presents the exact values and fixed Workspace parent. Existing names cause a safe failure without overwrite or rename. Automated parser/server tests cover schema validation, queueing, expiry, and capability boundaries. Windows Studio verification confirmed exact Part creation, rejection without creation, duplicate-name refusal with the original unchanged, and a Folder regression. Roblox runtime remains outside Node test coverage.
++
++## Phase 6A: one-shot read-only Workspace inspection (implemented; Studio runtime pending)
++
++An explicit **Inspect Workspace** action in the enabled Arena Direct extension panel creates a UUID request. Inspection has separate `/v1/inspections` request, status, and result routes and separate in-memory job records; it does not enter or modify the mutation queue and does not change Studio approval semantics. The extension credential creates/reads a request; the Studio plugin receives the one pending job through its authenticated heartbeat and submits the result with a one-job result capability. Both request and completed result are bound to the active Studio session. Duplicate IDs are rejected, only one inspection may be pending, at most 32 jobs are retained, pending jobs expire after 30 seconds, and completed results expire after 60 seconds.
++
++The Studio plugin performs a breadth-first walk beginning at `Workspace`, collecting only depths one and two. It stops traversal/collection at the depth boundary, 32 records, a 14 KiB serialized snapshot, or a 20-second work budget; it does not traverse the entire Workspace and truncate afterward. A `truncated` flag marks depth-boundary, record/size, and privacy-filter omissions. The server and extension enforce the exact snapshot shape, sequential temporary IDs (`o1`, `o2`, …), parent links, count, object and property limits, and a 14 KiB serialized snapshot cap; inspection HTTP bodies/results are capped at 16 KiB. A depth-two record requires `truncated=true`. Records contain names, class names, depth, and parent IDs. BaseParts alone may include `Position`, `Size`, RGB `Color`, `Material`, `Anchored`, and `CanCollide`. No script source, arbitrary properties, attributes, player data, or other services are read. Top-level Models with a direct Humanoid (character-like models) are excluded with their descendants to avoid collecting avatar names/parts; this uses Workspace structure only and does not query the Players service. Snapshot-local IDs are temporary references within one result, not stable Roblox identifiers.
++
++The extension validates and displays the result in a bounded preview. A separate explicit button can append it to Arena Direct’s composer as an **unsent draft**; it only updates the composer textarea and never invokes send. Tests exercise schema/limits, server authentication/session/lifecycle behavior, and the extension draft wiring. These are Node tests, not a Roblox Studio runtime test; user manual verification is still required.
+ 
+ ## Endpoints
+ 
+@@ -40,6 +48,8 @@ The extension and server accept one additional typed operation, `create_part`. I
+ - `POST /v1/session/heartbeat`: `CONNECTOR_TOKEN`; strict overview plus one pending/previously approved operation for Studio UI.
+ - `GET /v1/project/overview`: `CONNECTOR_TOKEN`; latest overview from the live session.
+ - `POST /v1/operations`: `CONNECTOR_EXTENSION_TOKEN`; exact typed `create_test_folder` or `create_part` request only.
++- `POST /v1/inspections`, `GET /v1/inspections/:id`: `CONNECTOR_EXTENSION_TOKEN`; separate one-shot read-only request/status.
++- `POST /v1/inspections/:id/result`: `CONNECTOR_TOKEN` plus the inspection result capability; strict bounded snapshot submission.
+ - `GET /v1/extension/status`, `GET /v1/operations/:id`: extension token; minimal status/result, never the approval capability.
+ - `POST /v1/operations/:id/decision` and `/result`: `CONNECTOR_TOKEN` and the per-request approval capability; used only by the Studio plugin.
+ 
+diff --git a/docs/development.md b/docs/development.md
+index 175bead818ed0bd6551a687e4ac42e2174341b6b..6d02e66f095e224616d2301e376c2340eaea3200 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -45,7 +45,7 @@ Do not print, commit, or paste either secret into Arena. The Studio token is ent
+ 
+ ## Update/install the Studio plugin
+ 
+-Open `studio-plugin/ArenaRobloxConnector.plugin.lua` and replace the complete source of the existing local plugin, then **Plugins → Save as Local Plugin**. Open the **Arena Connector** widget, enter the matching `CONNECTOR_TOKEN`, and click **Connect / refresh overview**. Confirm the session and read-only overview are live. The widget should also show that every requested operation needs explicit approval.
++Open `studio-plugin/ArenaRobloxConnector.plugin.lua` and replace the complete source of the existing local plugin, then **Plugins → Save as Local Plugin**. Open the **Arena Connector** widget, enter the matching `CONNECTOR_TOKEN`, and click **Connect / refresh overview**. Confirm the session and read-only overview are live. The widget should also show that every requested mutation needs explicit approval. Inspection is read-only and does not use this approval control.
+ 
+ When a command is pending, the plugin widget shows the Folder name and fixed target `Workspace`, with **Approve Folder** and **Reject** buttons. Approve only a request you intended. Rejecting or letting it expire must not create an instance.
+ 
+@@ -59,9 +59,9 @@ When a command is pending, the plugin widget shows the Folder name and fixed tar
+ 
+ If Chrome/Edge asks for access to the Arena site or the local connector, grant only the listed Arena and `127.0.0.1:4317` access needed by the extension. If the extension says Direct mode or the expected composer/response structure cannot be confirmed, stop and report the observed UI—do not add speculative selectors or use network interception.
+ 
+-## Manual end-to-end checklist (not run in this Linux workspace)
++## Phase 4B/5A Windows verification baseline and regression checklist
+ 
+-The live Arena page and Windows Studio are not available to the coding agent. Do this test locally before relying on the prototype:
++The coding workspace has no live Arena page or Windows Studio runtime. The user has nevertheless confirmed the Windows baseline: `create_test_folder` succeeded; `create_part` approval created the exact requested Part, rejection created nothing, duplicate-name refusal preserved the original, and a Folder regression succeeded. Use the checklist below if repeating the integration test after local updates:
+ 
+ 1. Run `npm test`; confirm the Node server and Studio plugin are connected.
+ 2. In Arena Direct, enable the handoff. Ask for a normal answer that does not request a Studio change. Confirm no operation is queued.
+@@ -71,16 +71,16 @@ The live Arena page and Windows Studio are not available to the coding agent. Do
+ 6. Optionally click **Draft result in Arena composer**; review the unsent draft before sending it. The extension never sends an assistant follow-up automatically.
+ 7. Stop the connector or Studio plugin and confirm the request expires/disconnects safely. Restarting the Node process clears in-memory session/operation state.
+ 
+-If the Arena response is not detected reliably, the page mode is ambiguous, or a command appears outside a rendered code block, stop testing and report the exact observed structure. Do not use Battle/Agent mode or relax the parser. `create_test_folder` has passed a Windows end-to-end smoke test; `create_part` remains unverified until the real browser/Studio checklist passes.
++For either the confirmed baseline or future regression testing, if the Arena response is not detected reliably, the page mode is ambiguous, or a command appears outside a rendered code block, stop and report the exact observed structure. Do not use Battle/Agent mode or relax the parser. The coding agent did not run this integration path; the verification above is from the user’s Windows test report.
+ 
+ 
+-## Phase 5A create_part manual verification
++## Phase 5A Windows verification details / regression steps
+ 
+-After updating the unpacked extension and replacing/reloading the Studio plugin, verify only with a throwaway/basic request: ask Arena Direct to create one anchored `SmoothPlastic` Part named `ArenaPlatform` at `(0, 5, 0)`, size `(12, 1, 12)`, RGB `(80, 160, 220)`, with `CanCollide` enabled. Confirm the Studio approval panel shows those exact properties and `Workspace`; reject once and verify no Part appears. Then send a fresh request, inspect the same preview, approve, and verify exactly one Part with those properties appears under `Workspace`. Finally submit a request whose name already exists and confirm it fails without overwriting or renaming. Do not test scripts, arbitrary instance types, or other operations. Record the observed result; local tests do not prove this Studio path.
++The user reports completing this verification. To repeat after a future update, use only a throwaway/basic request: ask Arena Direct to create one anchored `SmoothPlastic` Part named `ArenaPlatform` at `(0, 5, 0)`, size `(12, 1, 12)`, RGB `(80, 160, 220)`, with `CanCollide` enabled. Confirm the Studio approval panel shows those exact properties and `Workspace`; reject once and verify no Part appears. Then send a fresh request, inspect the same preview, approve, and verify exactly one Part with those properties appears under `Workspace`. Finally submit a request whose name already exists and confirm it fails without overwriting or renaming. Do not test scripts, arbitrary instance types, or other operations. Record the observed result; Node tests do not prove the Studio path.
+ 
+ ## Plugin-side name guard and test limitation
+ 
+-The plugin checks pending names before calling `setApproval` (and before the approved-operation recovery path): nonempty string, maximum 40 characters, no leading/trailing whitespace, and only ASCII letters, digits, spaces, `_`, or `-`. It rejects rather than normalizes invalid names. The Node suite cannot execute Roblox Luau or the Studio plugin runtime, and the normal server will reject invalid names before they reach Studio; there is no supported route for injecting an invalid heartbeat payload in the production flow. Thus this plugin guard has static code review, not an automated runtime test.
++The plugin checks pending names before calling `setApproval` (and before the approved-operation recovery path): nonempty string, maximum 40 characters, no leading/trailing whitespace, and only ASCII letters, digits, spaces, `_`, or `-`. It rejects rather than normalizes invalid names. Windows verification now confirms the Part approval/create path, rejection-without-create, duplicate-name refusal, and Folder regression. The Node suite cannot execute Roblox Luau or the Studio plugin runtime, and the normal server will reject invalid names before they reach Studio; there is no supported route for injecting an invalid heartbeat payload in the production flow. Thus this plugin guard has static code review, not an automated runtime test.
+ 
+ Manual Studio checklist after updating the local plugin:
+ 
+@@ -88,3 +88,17 @@ Manual Studio checklist after updating the local plugin:
+ 2. Submit and approve a valid Folder request with a name such as `Arena Test_1-OK`; verify the name is preserved exactly and the Folder is created once.
+ 3. Submit a valid Part request with a valid name; verify its full preview and approve it.
+ 4. Confirm the plugin source’s pending-operation gate calls `validOperationName` before either displaying a request or recovering an approved one. Do not weaken the production server to inject malformed requests. Testing rejection of malformed heartbeat data at runtime would require a separate, isolated test harness and is not covered by this prototype.
++
++
++## Phase 6A one-shot Workspace inspection (manual Studio runtime test required)
++
++Node tests validate the server lifecycle, schema, authentication/session binding, expiration, duplicate IDs, byte/object limits, truncation contract, and extension draft wiring. They do **not** run Roblox Studio or the Luau plugin. After updating the plugin and reloading the unpacked extension:
++
++1. Confirm the connector is loopback-only, both credentials remain separate, and the Studio plugin is connected with a live heartbeat. Open Arena Direct and enable the extension handoff.
++2. Click **Inspect Workspace** once. Confirm the Studio plugin reports read-only inspection, then the extension displays a result with request ID, capture time, count, temporary IDs/parent links, and truncation status. Confirm depth is at most two and there are no more than 32 objects.
++3. Include a BasePart and verify only Position, Size, RGB Color, Material, Anchored, and CanCollide appear. Confirm no scripts/source, attributes, player data, or other services are shown. If a top-level character-like Model has a direct Humanoid, it and its descendants should be omitted.
++4. If the Workspace contains enough descendants—or a character-like Model is excluded—confirm the result is marked partial/truncated; do not infer that the full Workspace was captured. Snapshot IDs are temporary references, not stable Roblox IDs.
++5. Click **Draft snapshot for Arena** and verify the bounded snapshot appears in the composer as an unsent draft. Confirm no message is sent until you personally use Arena’s send control. Also verify that no Workspace object was changed by inspection.
++6. Repeat after disconnecting/re-registering Studio or allowing the request to expire; stale-session/expired requests should not deliver a result. Do not test by weakening authentication or adding any mutation.
++
++Record the Studio version and observed result. If the widget reports an error or the snapshot violates bounds/schema, stop and report it; do not claim runtime verification from the Node suite.
+diff --git a/docs/security.md b/docs/security.md
+index 64b1612eacb0ea701a9a9905869ec7077dda3817..3642351584906beb0d439f37ba26ced0374fc25f 100644
+--- a/docs/security.md
++++ b/docs/security.md
+@@ -6,7 +6,7 @@
+ - `CONNECTOR_TOKEN` is required by the Studio plugin routes. `CONNECTOR_EXTENSION_TOKEN` is a separate secret for the extension-facing routes. Both must be at least 32 characters and must differ. Comparisons use timing-safe equality for equal-length values. Secrets are never logged.
+ - The plugin token remains a local shared secret; `plugin:SetSetting` is convenient, not a documented encrypted vault. The extension token is kept in the user's browser extension storage, not in page DOM, a content-script message, or an assistant-visible prompt. Browser profile/extension compromise can still expose it; rotate it if needed.
+ - A new plugin session gets a cryptographically random UUID. Each heartbeat must match the active ID. New registration replaces the old one; heartbeat expiry is 15 seconds. Old/stale IDs cannot refresh the active session.
+-- Bodies and serialized responses are capped at 8 KiB; the overview uses an exact key contract, service allowlist, unique entries, bounded counts, and type checks. Server request/header timeouts are set. No conversation data is stored or read by the connector.
++- Existing operational bodies/responses are capped at 8 KiB; the overview uses an exact key contract, service allowlist, unique entries, bounded counts, and type checks. Separate inspection HTTP bodies are capped at 16 KiB, and an exact-schema serialized snapshot at 14 KiB. Server request/header timeouts are set. No conversation data is stored or read by the connector.
+ 
+ ## Phase 4B mutation boundary
+ 
+@@ -17,8 +17,15 @@
+ - Result delivery is a minimal operation status/name. The extension may place that status into an Arena composer draft only after a user click; it never auto-sends a success claim.
+ - Server state is in-memory; restart loses session, queue, and result status. The prototype does not promise durable recovery across server/Studio restarts.
+ 
++## Phase 6A read-only inspection boundary
++
++- Inspection is opt-in per request from the extension panel and uses its own routes/job map; it is not a mutation operation and cannot approve or execute mutations. The plugin still requires explicit Studio approval for every mutation.
++- The plugin walks Workspace breadth-first only to two child levels, stopping when record/serialized-size/time limits are reached rather than traversing the entire tree. Maximum 32 records, 14 KiB serialized snapshot, 16 KiB HTTP result, and explicit truncation status constrain output. Only object names/classes, depth/temporary parent references, and the allowlisted BasePart properties Position, Size, RGB Color, Material, Anchored, and CanCollide are captured. No source, arbitrary properties, attributes, player data, or other services. Top-level Models with a direct Humanoid are omitted with descendants as a privacy guard; the plugin does not query the Players service.
++- IDs such as `o1` are temporary, snapshot-local references and not stable Roblox identifiers. Exact server/extension validation rejects malformed shape, hierarchy, properties, count, and bytes. Jobs/results are session-bound, capability-protected, duplicate request IDs rejected, one pending job maximum, with 30-second pending and 60-second completed-result expiry and bounded retention.
++- The result is displayed only after a user request. A separate explicit button inserts the bounded result into the Arena composer as an unsent draft; no automatic send occurs.
++
+ ## Remaining risks and verification
+ 
+ The Arena DOM selectors and response-completion signal come from a third-party provider that reports validation on Arena Direct in June 2026. This agent had no live browser/DOM to verify the October 2026 page, and the local-LAN permission behavior varies by browser. DOM changes may make the feature stop detecting responses; fail-closed behavior should prevent fallback to broad scraping. Verify the actual browser path before trusting it. The extension's local token is not encrypted, and a compromised browser profile/extension or local machine is outside this prototype's protection boundary.
+ 
+-The first Windows end-to-end `create_test_folder` smoke test succeeded. The new `create_part` operation still requires a separate Windows Studio retest. No public listener, CORS-based trust, remote relay, shell, filesystem operation, arbitrary Luau execution, or automatic project mutation without Studio approval is included.
++Windows verification is complete for the Phase 4B Folder and Phase 5A Part paths: approval created the exact Part, rejection created nothing, duplicate-name refusal preserved the original, and Folder regression passed. Phase 6A has only code/Node-test coverage so far; the user must manually verify the Studio plugin runtime. No public listener, CORS-based trust, remote relay, shell, filesystem operation, arbitrary Luau execution, or automatic project mutation without Studio approval is included.
+diff --git a/extension/background.js b/extension/background.js
+index 10f29d126e0b756939a3710e1681113b8a552305..6e0781572c663a6846645e0e7d446c5986b817d4 100644
+--- a/extension/background.js
++++ b/extension/background.js
+@@ -1,5 +1,6 @@
+ 'use strict';
+-importScripts('command-parser.js');
++importScripts('command-parser.js', 'inspection-schema.js');
++const INSPECTION = globalThis.ArenaProjectInspection;
+ const API = 'http://127.0.0.1:4317';
+ const TOKEN_KEY = 'connectorExtensionToken';
+ const COMMAND = globalThis.ArenaCommandParser;
+@@ -81,6 +82,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+       sendResponse(await connectorFetch('/v1/extension/status'));
+       return;
+     }
++    if (message.type === 'request_inspection') {
++      if (!isArenaSender(sender) || !INSPECTION?.validRequestId(message.requestId)) {
++        sendResponse({ ok: false, error: 'inspection_request_not_allowed' });
++        return;
++      }
++      const result = await connectorFetch('/v1/inspections', {
++        method: 'POST',
++        body: JSON.stringify({ requestId: message.requestId }),
++      });
++      sendResponse(result.ok
++        ? { ok: true, inspection: result.body }
++        : { ok: false, error: result.body.error || result.error || 'inspection_request_rejected' });
++      return;
++    }
++    if (message.type === 'inspection_status') {
++      if (!isArenaSender(sender) || !INSPECTION?.validRequestId(message.requestId)) {
++        sendResponse({ ok: false, error: 'inspection_request_not_allowed' });
++        return;
++      }
++      const result = await connectorFetch(`/v1/inspections/${message.requestId}`);
++      if (!result.ok || !result.body.inspection) {
++        sendResponse({ ok: false, error: result.body.error || result.error || 'inspection_status_unavailable' });
++        return;
++      }
++      const inspection = result.body.inspection;
++      if (inspection.status === 'completed' && !INSPECTION.validateSnapshot(inspection.snapshot, message.requestId)) {
++        sendResponse({ ok: false, error: 'invalid_inspection_snapshot' });
++        return;
++      }
++      sendResponse({ ok: true, inspection });
++      return;
++    }
+     if (message.type === 'submit_command') {
+       if (!isArenaSender(sender)) {
+         sendResponse({ ok: false, error: 'sender_not_allowed' });
+diff --git a/extension/content.js b/extension/content.js
+index 1a5e9e633177d25e8a66d9ea521aa406896e21c1..a641f3210be3996f2ebd4dd5daf1a8cafb0b2181 100644
+--- a/extension/content.js
++++ b/extension/content.js
+@@ -1,7 +1,8 @@
+ 'use strict';
+ (() => {
+   const P = globalThis.ArenaCommandParser;
+-  if (!P) return;
++  const INSPECTION = globalThis.ArenaProjectInspection;
++  if (!P || !INSPECTION) return;
+   const INSTRUCTION = [
+     'Arena Roblox Connector handoff format (request only; it is not authorization):',
+     'Answer normally. If and only if I explicitly request a test Folder or one basic Part, include exactly one fenced JSON command. Put exactly one JSON object between the marker lines; do not include both examples. Never output code or any other operation.',
+@@ -19,7 +20,7 @@
+   const style = document.createElement('style');
+   style.textContent = `
+     .panel{position:fixed;z-index:2147483647;right:16px;bottom:16px;width:min(360px,calc(100vw - 32px));box-sizing:border-box;padding:12px;border:1px solid #56647a;border-radius:12px;background:#171d29;color:#f3f6fb;box-shadow:0 8px 32px #0008;font:13px/1.4 system-ui,sans-serif}
+-    .top{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px}.top input{accent-color:#71a8ff}.status{margin-top:7px;color:#c4cee0;white-space:pre-wrap}.small{margin-top:6px;color:#9eabc1;font-size:11px}.draft{display:none;margin-top:8px;padding:6px 9px;border:0;border-radius:6px;background:#3b72b8;color:#fff;cursor:pointer}
++    .top{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px}.top input{accent-color:#71a8ff}.status{margin-top:7px;color:#c4cee0;white-space:pre-wrap}.small{margin-top:6px;color:#9eabc1;font-size:11px}.draft,.inspect{margin-top:8px;padding:7px 9px;border:0;border-radius:6px;background:#3b72b8;color:#fff;cursor:pointer}.draft{display:none}.inspect:disabled{opacity:.55;cursor:default}.inspection-preview{display:none;max-height:220px;overflow:auto;margin:8px 0 0;padding:8px;border-radius:6px;background:#252c39;color:#e8edf5;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.4 ui-monospace,monospace}
+   `;
+   const panel = document.createElement('div');
+   panel.className = 'panel';
+@@ -34,17 +35,30 @@
+   status.className = 'status';
+   const note = document.createElement('div');
+   note.className = 'small';
+-  note.textContent = 'One typed operation only. Approval is always required in Roblox Studio. No chat history is sent to the connector.';
++  note.textContent = 'Only two allowlisted mutations are supported; each requires Studio approval. Workspace inspection is read-only and user-initiated. No chat history is sent to the connector.';
++  const inspectButton = document.createElement('button');
++  inspectButton.className = 'inspect';
++  inspectButton.type = 'button';
++  inspectButton.textContent = 'Inspect Workspace (read-only)';
++  inspectButton.disabled = true;
++  const inspectionPreview = document.createElement('pre');
++  inspectionPreview.className = 'inspection-preview';
++  const draftInspectionButton = document.createElement('button');
++  draftInspectionButton.className = 'draft';
++  draftInspectionButton.type = 'button';
++  draftInspectionButton.textContent = 'Draft snapshot for Arena';
+   const draftButton = document.createElement('button');
+   draftButton.className = 'draft';
+   draftButton.type = 'button';
+   draftButton.textContent = 'Draft result in Arena composer';
+-  panel.append(top, status, note, draftButton);
++  panel.append(top, status, note, inspectButton, inspectionPreview, draftInspectionButton, draftButton);
+   shadow.append(style, panel);
+   (document.documentElement || document.body).appendChild(host);
+ 
+   let enabled = false;
+   let latestCommand = null;
++  let latestInspection = null;
++  let inspectionBusy = false;
+   let scanTimer = null;
+   const handled = new WeakSet();
+   const streamState = new WeakMap();
+@@ -146,6 +160,69 @@
+       }, true);
+     });
+   }
++  function showInspectionResult(snapshot) {
++    const formatted = INSPECTION.formatSnapshot(snapshot);
++    if (!formatted) {
++      renderStatus('Inspection result failed strict schema or draft-size validation.');
++      return;
++    }
++    latestInspection = snapshot;
++    inspectionPreview.textContent = formatted;
++    inspectionPreview.style.display = 'block';
++    draftInspectionButton.style.display = 'inline-block';
++    const suffix = snapshot.truncated ? ' (partial: depth, record, byte, or privacy filtering omitted content)' : '';
++    renderStatus(`Read-only Workspace snapshot ready: ${snapshot.objectCount} objects${suffix}. Review the visible snapshot, then explicitly draft it for Arena.`);
++  }
++  async function pollInspection(requestId, deadline) {
++    let result;
++    try { result = await chrome.runtime.sendMessage({ type: 'inspection_status', requestId }); }
++    catch { result = { ok: false, error: 'extension_worker_unavailable' }; }
++    if (!result?.ok || !result.inspection) {
++      renderStatus(`Inspection status unavailable: ${result?.error || 'connector unavailable'}. No project data was drafted.`);
++      inspectionBusy = false;
++      inspectButton.disabled = !enabled;
++      return;
++    }
++    if (result.inspection.status === 'completed') {
++      showInspectionResult(result.inspection.snapshot);
++      inspectionBusy = false;
++      inspectButton.disabled = !enabled;
++      return;
++    }
++    if (result.inspection.status === 'expired' || Date.now() >= deadline) {
++      renderStatus('Read-only inspection expired before completion. No project data was drafted.');
++      inspectionBusy = false;
++      inspectButton.disabled = !enabled;
++      return;
++    }
++    renderStatus(`Waiting for the connected Studio plugin to inspect Workspace… Request ${requestId.slice(0, 8)}`);
++    setTimeout(() => pollInspection(requestId, deadline), 1000);
++  }
++  async function requestInspection() {
++    if (!enabled || mode() !== 'direct') {
++      renderStatus('Enable handoff in Arena Direct before requesting a Workspace inspection.');
++      return;
++    }
++    if (inspectionBusy) return;
++    inspectionBusy = true;
++    latestInspection = null;
++    inspectionPreview.textContent = '';
++    inspectionPreview.style.display = 'none';
++    draftInspectionButton.style.display = 'none';
++    inspectButton.disabled = true;
++    const requestId = uuid();
++    renderStatus('Requesting a bounded, read-only Workspace snapshot…');
++    let result;
++    try { result = await chrome.runtime.sendMessage({ type: 'request_inspection', requestId }); }
++    catch { result = { ok: false, error: 'extension_worker_unavailable' }; }
++    if (!result?.ok) {
++      renderStatus(`Inspection not requested: ${result?.error || 'connector unavailable'}.`);
++      inspectionBusy = false;
++      inspectButton.disabled = !enabled;
++      return;
++    }
++    pollInspection(requestId, Date.now() + 32_000);
++  }
+   function statusFor(command, requestId) {
+     const labels = {
+       pending: `Queued for Studio approval: Workspace/${command.name}.`,
+@@ -190,6 +267,7 @@
+   }
+   function scan() {
+     installPromptHooks();
++    if (inspectionBusy) return;
+     if (!enabled) {
+       renderStatus('Off. Turn on handoff to append a visible command-format instruction and monitor new Direct replies.');
+       return;
+@@ -233,9 +311,11 @@
+ 
+   toggle.addEventListener('change', async () => {
+     enabled = toggle.checked;
++    inspectButton.disabled = !enabled;
+     const stored = await chrome.runtime.sendMessage({ type: 'set_handoff_enabled', enabled });
+     if (!stored?.ok) {
+       enabled = false;
++      inspectButton.disabled = true;
+       toggle.checked = false;
+       renderStatus('Could not save the handoff setting in the extension worker.');
+       return;
+@@ -250,6 +330,22 @@
+       renderStatus('Off. No Arena response text is monitored.');
+     }
+   });
++  inspectButton.addEventListener('click', requestInspection);
++  draftInspectionButton.addEventListener('click', () => {
++    if (!latestInspection || !enabled || mode() !== 'direct') return;
++    const editor = document.querySelector('form textarea');
++    if (!editor) { renderStatus('Arena composer not found; snapshot remains visible in the extension panel.'); return; }
++    const draft = INSPECTION.appendSnapshotToDraft(editor.value, latestInspection);
++    if (!draft) {
++      renderStatus('Snapshot exceeds the safe draft limit or failed validation; no prompt was changed.');
++      return;
++    }
++    if (!setTextareaValue(editor, draft)) {
++      renderStatus('Could not safely identify the Arena composer; snapshot remains visible and unsent.');
++      return;
++    }
++    renderStatus('Snapshot added as an unsent Arena draft. Review it and click Arena’s Send yourself.');
++  });
+   draftButton.addEventListener('click', () => {
+     if (!latestCommand) return;
+     const editor = document.querySelector('form textarea');
+@@ -261,6 +357,7 @@
+   chrome.runtime.sendMessage({ type: 'get_handoff_enabled' }).then(value => {
+     enabled = value?.ok === true && value.enabled === true;
+     toggle.checked = enabled;
++    inspectButton.disabled = !enabled;
+     if (enabled) assistantTurns().forEach(item => handled.add(item));
+     scan();
+   }).catch(() => renderStatus('Could not read the handoff setting from the extension worker.'));
+diff --git a/extension/inspection-schema.js b/extension/inspection-schema.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..1ca33b390739a5aed7e11ca27359b1a270453eda
+--- /dev/null
++++ b/extension/inspection-schema.js
+@@ -0,0 +1,74 @@
++'use strict';
++(function exposeInspection(root) {
++  const MAX_OBJECTS = 32;
++  const MAX_SNAPSHOT_BYTES = 14 * 1024;
++  const MAX_DRAFT_BYTES = 16 * 1024;
++  const BASE_PART_CLASSES = new Set(['BasePart', 'Part', 'MeshPart', 'WedgePart', 'CornerWedgePart', 'TrussPart', 'Seat', 'VehicleSeat', 'SpawnLocation', 'UnionOperation', 'Terrain', 'SkateboardPlatform', 'FlagStand', 'FormFactorPart', 'PartOperation']);
++  const utf8Bytes = text => new TextEncoder().encode(text).byteLength;
++  function validRequestId(value) {
++    return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
++  }
++  function vector(value, min, max) {
++    return !!value && typeof value === 'object' && !Array.isArray(value)
++      && Object.keys(value).sort().join(',') === 'x,y,z'
++      && ['x', 'y', 'z'].every(key => Number.isFinite(value[key]) && value[key] >= min && value[key] <= max);
++  }
++  function validateSnapshot(snapshot, expectedRequestId) {
++    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
++      || Object.keys(snapshot).sort().join(',') !== 'capturedAt,objectCount,objects,requestId,truncated'
++      || !validRequestId(snapshot.requestId) || (expectedRequestId && snapshot.requestId !== expectedRequestId)
++      || typeof snapshot.capturedAt !== 'string' || snapshot.capturedAt.length > 40 || !Number.isFinite(Date.parse(snapshot.capturedAt))
++      || typeof snapshot.truncated !== 'boolean' || !Number.isInteger(snapshot.objectCount)
++      || !Array.isArray(snapshot.objects) || snapshot.objects.length > MAX_OBJECTS
++      || snapshot.objectCount !== snapshot.objects.length) return false;
++    const ids = new Map();
++    let previousDepth = 1;
++    for (let index = 0; index < snapshot.objects.length; index++) {
++      const item = snapshot.objects[index];
++      if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
++      const keys = Object.keys(item).sort().join(',');
++      if (keys !== 'className,depth,id,name,parentId' && keys !== 'className,depth,id,name,parentId,properties') return false;
++      if (item.id !== `o${index + 1}` || typeof item.parentId !== 'string'
++        || typeof item.name !== 'string' || utf8Bytes(item.name) > 1024
++        || typeof item.className !== 'string' || item.className.length < 1 || item.className.length > 64
++        || !Number.isInteger(item.depth) || item.depth < 1 || item.depth > 2 || item.depth < previousDepth) return false;
++      if (item.parentId === 'workspace') {
++        if (item.depth !== 1) return false;
++      } else if (!ids.has(item.parentId) || ids.get(item.parentId) !== item.depth - 1) return false;
++      if (item.depth === 2 && snapshot.truncated !== true) return false;
++      ids.set(item.id, item.depth);
++      previousDepth = item.depth;
++      const hasProperties = Object.hasOwn(item, 'properties');
++      if (hasProperties !== BASE_PART_CLASSES.has(item.className)) return false;
++      if (hasProperties) {
++        const p = item.properties;
++        if (!p || typeof p !== 'object' || Array.isArray(p)
++          || Object.keys(p).sort().join(',') !== 'anchored,canCollide,color,material,position,size'
++          || !vector(p.position, -10_000_000, 10_000_000) || !vector(p.size, 0, 10_000_000)
++          || !vector(p.color, 0, 255) || typeof p.material !== 'string' || p.material.length < 1 || p.material.length > 64
++          || typeof p.anchored !== 'boolean' || typeof p.canCollide !== 'boolean') return false;
++      }
++    }
++    return utf8Bytes(JSON.stringify(snapshot)) <= MAX_SNAPSHOT_BYTES;
++  }
++  function formatSnapshot(snapshot) {
++    if (!validateSnapshot(snapshot)) return null;
++    const text = [
++      'Read-only Roblox Studio Workspace snapshot. Snapshot-local IDs (o1, o2, …) are temporary and are not stable Roblox identifiers.',
++      `Snapshot ${snapshot.requestId}; captured ${snapshot.capturedAt}; ${snapshot.objectCount} objects; truncated=${snapshot.truncated}.`,
++      'This is bounded inspection data, not authorization to edit the project.',
++      JSON.stringify(snapshot),
++    ].join('\n');
++    return utf8Bytes(text) <= MAX_DRAFT_BYTES ? text : null;
++  }
++  function appendSnapshotToDraft(currentText, snapshot) {
++    if (typeof currentText !== 'string') return null;
++    const formatted = formatSnapshot(snapshot);
++    if (!formatted || utf8Bytes(formatted) > MAX_DRAFT_BYTES) return null;
++    const prefix = currentText.trimEnd();
++    return `${prefix}${prefix ? '\n\n' : ''}${formatted}`;
++  }
++  const api = Object.freeze({ MAX_OBJECTS, MAX_SNAPSHOT_BYTES, MAX_DRAFT_BYTES, validRequestId, validateSnapshot, formatSnapshot, appendSnapshotToDraft });
++  if (typeof module !== 'undefined' && module.exports) module.exports = api;
++  root.ArenaProjectInspection = api;
++})(typeof globalThis === 'undefined' ? this : globalThis);
+diff --git a/extension/manifest.json b/extension/manifest.json
+index 8a1372149794eaaa10ebe1104f93be4b0f6a18e7..3bab082cffb66553c5812d7ff3d7141164956de3 100644
+--- a/extension/manifest.json
++++ b/extension/manifest.json
+@@ -19,7 +19,7 @@
+   "content_scripts": [
+     {
+       "matches": ["https://arena.ai/text/*", "https://arena.ai/c/*"],
+-      "js": ["command-parser.js", "content.js"],
++      "js": ["command-parser.js", "inspection-schema.js", "content.js"],
+       "run_at": "document_idle"
+     }
+   ]
+diff --git a/server/index.js b/server/index.js
+index dc6e80d469b97a24dde8eb882519070e54521a5a..5955117242d8fa62f4b4ab2961b51945dd306523 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -10,6 +10,13 @@ const HEARTBEAT_TTL_MS = 15_000;
+ const COMMAND_TTL_MS = 60_000;
+ const COMMAND_RETENTION_MS = 5 * 60_000;
+ const MAX_BODY_BYTES = 8 * 1024;
++const MAX_SNAPSHOT_BYTES = 14 * 1024;
++const MAX_INSPECTION_HTTP_BYTES = 16 * 1024;
++const INSPECTION_TTL_MS = 30_000;
++const INSPECTION_RESULT_TTL_MS = 60_000;
++const MAX_INSPECTION_JOBS = 32;
++const MAX_PENDING_INSPECTIONS = 1;
++const MAX_INSPECTION_OBJECTS = 32;
+ const MAX_COMMANDS = 128;
+ const MAX_PENDING_COMMANDS = 8;
+ const ALLOWED_SERVICES = new Set([
+@@ -46,6 +53,7 @@ function validOverview(value) {
+   return true;
+ }
+ const MATERIALS = new Set(['Plastic', 'SmoothPlastic', 'Wood', 'WoodPlanks', 'Concrete', 'Brick', 'Metal', 'Grass', 'Ice', 'Glass', 'Neon', 'Sand', 'Slate', 'Marble']);
++const BASE_PART_CLASSES = new Set(['BasePart', 'Part', 'MeshPart', 'WedgePart', 'CornerWedgePart', 'TrussPart', 'Seat', 'VehicleSeat', 'SpawnLocation', 'UnionOperation', 'Terrain', 'SkateboardPlatform', 'FlagStand', 'FormFactorPart', 'PartOperation']);
+ function validName(value) {
+   return typeof value === 'string' && value.length > 0 && value.length <= 40
+     && value.trim() === value && /^[A-Za-z0-9 _-]+$/.test(value);
+@@ -68,15 +76,60 @@ function validOperation(body) {
+     && validVector(body.position, -10000, 10000) && validVector(body.size, 0.1, 512) && validVector(body.color, 0, 255, true)
+     && MATERIALS.has(body.material) && typeof body.anchored === 'boolean' && typeof body.canCollide === 'boolean';
+ }
++function validInspectionVector(value, min, max) {
++  return !!value && typeof value === 'object' && !Array.isArray(value)
++    && Object.keys(value).sort().join(',') === 'x,y,z'
++    && ['x', 'y', 'z'].every(key => typeof value[key] === 'number' && Number.isFinite(value[key]) && value[key] >= min && value[key] <= max);
++}
++function validInspectionSnapshot(snapshot, expectedRequestId) {
++  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
++    || Object.keys(snapshot).sort().join(',') !== 'capturedAt,objectCount,objects,requestId,truncated'
++    || snapshot.requestId !== expectedRequestId || !validRequestId(snapshot.requestId)
++    || typeof snapshot.capturedAt !== 'string' || snapshot.capturedAt.length > 40 || !Number.isFinite(Date.parse(snapshot.capturedAt))
++    || typeof snapshot.truncated !== 'boolean' || !Number.isInteger(snapshot.objectCount)
++    || !Array.isArray(snapshot.objects) || snapshot.objects.length > MAX_INSPECTION_OBJECTS
++    || snapshot.objectCount !== snapshot.objects.length) return false;
++  const ids = new Map();
++  let lastDepth = 1;
++  for (let index = 0; index < snapshot.objects.length; index++) {
++    const item = snapshot.objects[index];
++    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
++    const keys = Object.keys(item).sort().join(',');
++    if (keys !== 'className,depth,id,name,parentId' && keys !== 'className,depth,id,name,parentId,properties') return false;
++    if (item.id !== `o${index + 1}` || typeof item.parentId !== 'string'
++      || typeof item.name !== 'string' || Buffer.byteLength(item.name, 'utf8') > 1024
++      || typeof item.className !== 'string' || item.className.length < 1 || item.className.length > 64
++      || !Number.isInteger(item.depth) || item.depth < 1 || item.depth > 2 || item.depth < lastDepth) return false;
++    if (item.parentId === 'workspace') {
++      if (item.depth !== 1) return false;
++    } else if (!ids.has(item.parentId) || ids.get(item.parentId) !== item.depth - 1) return false;
++    if (item.depth === 2 && snapshot.truncated !== true) return false;
++    lastDepth = item.depth;
++    ids.set(item.id, item.depth);
++    const hasProperties = Object.hasOwn(item, 'properties');
++    if (hasProperties !== BASE_PART_CLASSES.has(item.className)) return false;
++    if (hasProperties) {
++      const props = item.properties;
++      if (!props || typeof props !== 'object' || Array.isArray(props)
++        || Object.keys(props).sort().join(',') !== 'anchored,canCollide,color,material,position,size'
++        || !validInspectionVector(props.position, -10_000_000, 10_000_000)
++        || !validInspectionVector(props.size, 0, 10_000_000)
++        || !validInspectionVector(props.color, 0, 255)
++        || typeof props.material !== 'string' || props.material.length < 1 || props.material.length > 64
++        || typeof props.anchored !== 'boolean' || typeof props.canCollide !== 'boolean') return false;
++    }
++  }
++  return Buffer.byteLength(JSON.stringify(snapshot), 'utf8') <= MAX_SNAPSHOT_BYTES;
++}
+ function validExtensionOrigin(origin) {
+   return typeof origin === 'string' && /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
+ }
+-async function readJson(req) {
++async function readJson(req, maxBytes = MAX_BODY_BYTES) {
+   const chunks = [];
+   let size = 0;
+   for await (const chunk of req) {
+     size += chunk.length;
+-    if (size > MAX_BODY_BYTES) {
++    if (size > maxBytes) {
+       const error = new Error('body_too_large');
+       error.statusCode = 413;
+       throw error;
+@@ -97,12 +150,13 @@ async function readJson(req) {
+   }
+   return value;
+ }
+-function createServer({ token = TOKEN, extensionToken = EXTENSION_TOKEN, now = Date.now, sessionTtlMs = HEARTBEAT_TTL_MS, commandTtlMs = COMMAND_TTL_MS } = {}) {
++function createServer({ token = TOKEN, extensionToken = EXTENSION_TOKEN, now = Date.now, sessionTtlMs = HEARTBEAT_TTL_MS, commandTtlMs = COMMAND_TTL_MS, inspectionTtlMs = INSPECTION_TTL_MS } = {}) {
+   let activeSession = null;
+   const commands = new Map();
+-  const send = (res, code, body) => {
++  const inspections = new Map();
++  const send = (res, code, body, maxBytes = MAX_BODY_BYTES) => {
+     const json = JSON.stringify(body);
+-    if (Buffer.byteLength(json) > MAX_BODY_BYTES) {
++    if (Buffer.byteLength(json) > maxBytes) {
+       res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+       res.end('{"error":"response_too_large"}');
+       return;
+@@ -129,6 +183,19 @@ function createServer({ token = TOKEN, extensionToken = EXTENSION_TOKEN, now = D
+       commands.delete(first);
+     }
+   };
++  const pruneInspections = () => {
++    for (const [id, job] of inspections) {
++      if (job.status === 'pending' && now() > job.expiresAt) job.status = 'expired';
++      if (job.status === 'completed' && now() > job.resultExpiresAt) inspections.delete(id);
++      else if (job.status !== 'completed' && now() - job.createdAt > INSPECTION_RESULT_TTL_MS) inspections.delete(id);
++    }
++  };
++  const getInspectionStatus = (job) => ({
++    requestId: job.requestId,
++    status: job.status,
++    expiresAt: new Date(job.status === 'completed' ? job.resultExpiresAt : job.expiresAt).toISOString(),
++    ...(job.status === 'completed' ? { snapshot: job.snapshot } : {}),
++  });
+   const getExtensionCommand = (id) => {
+     const command = commands.get(id);
+     if (!command) return null;
+@@ -208,6 +275,43 @@ function createServer({ token = TOKEN, extensionToken = EXTENSION_TOKEN, now = D
+         return send(res, 200, { ok: true, command });
+       }
+ 
++      if (req.method === 'POST' && path === '/v1/inspections') {
++        if (!extensionAuth) return send(res, 401, { error: 'unauthorized' });
++        pruneInspections();
++        const body = await readJson(req);
++        if (Object.keys(body).sort().join(',') !== 'requestId' || !validRequestId(body.requestId)) {
++          return send(res, 400, { error: 'invalid_inspection_request' });
++        }
++        if (inspections.has(body.requestId)) return send(res, 409, { error: 'duplicate_inspection_request' });
++        const session = liveSession();
++        if (!session) return send(res, 503, { error: 'studio_disconnected' });
++        const pendingCount = [...inspections.values()].filter(item => item.sessionId === session.id && item.status === 'pending').length;
++        if (pendingCount >= MAX_PENDING_INSPECTIONS || inspections.size >= MAX_INSPECTION_JOBS) return send(res, 429, { error: 'inspection_queue_full' });
++        const createdAt = now();
++        const job = {
++          requestId: body.requestId,
++          sessionId: session.id,
++          resultToken: randomBytes(24).toString('base64url'),
++          createdAt,
++          expiresAt: createdAt + inspectionTtlMs,
++          resultExpiresAt: null,
++          status: 'pending',
++          snapshot: null,
++        };
++        inspections.set(job.requestId, job);
++        return send(res, 202, { ok: true, requestId: job.requestId, status: job.status, expiresAt: new Date(job.expiresAt).toISOString() });
++      }
++      const inspectionGetMatch = path.match(/^\/v1\/inspections\/([0-9a-f-]{36})$/i);
++      if (req.method === 'GET' && inspectionGetMatch) {
++        if (!extensionAuth) return send(res, 401, { error: 'unauthorized' });
++        pruneInspections();
++        const job = inspections.get(inspectionGetMatch[1]);
++        if (!job) return send(res, 404, { error: 'inspection_not_found' });
++        const session = liveSession();
++        if (!session || job.sessionId !== session.id) return send(res, 409, { error: 'inspection_session_expired' });
++        return send(res, 200, { ok: true, inspection: getInspectionStatus(job) }, MAX_INSPECTION_HTTP_BYTES);
++      }
++
+       if (!pluginAuth) return send(res, 401, { error: 'unauthorized' });
+       if (req.method === 'GET' && path === '/v1/status') {
+         const session = liveSession();
+@@ -239,12 +343,15 @@ function createServer({ token = TOKEN, extensionToken = EXTENSION_TOKEN, now = D
+         session.overview = body.overview;
+         pruneCommands();
+         const command = [...commands.values()].find(item => item.sessionId === session.id && (item.status === 'pending' || item.status === 'approved'));
++        pruneInspections();
++        const inspection = [...inspections.values()].find(item => item.sessionId === session.id && item.status === 'pending');
+         return send(res, 200, {
+           ok: true,
+           sessionId: session.id,
+           connected: true,
+           lastHeartbeatAt: new Date(session.lastSeenAt).toISOString(),
+           pendingOperation: command ? { ...safeOperation(command), approvalToken: command.approvalToken } : null,
++          pendingInspection: inspection ? { requestId: inspection.requestId, sessionId: inspection.sessionId, resultToken: inspection.resultToken, expiresAt: new Date(inspection.expiresAt).toISOString() } : null,
+         });
+       }
+       if (req.method === 'GET' && path === '/v1/project/overview') {
+@@ -258,6 +365,25 @@ function createServer({ token = TOKEN, extensionToken = EXTENSION_TOKEN, now = D
+           project: session.overview,
+         });
+       }
++      const inspectionResultMatch = path.match(/^\/v1\/inspections\/([0-9a-f-]{36})\/result$/i);
++      if (req.method === 'POST' && inspectionResultMatch) {
++        const body = await readJson(req, MAX_INSPECTION_HTTP_BYTES);
++        if (Object.keys(body).sort().join(',') !== 'requestId,resultToken,sessionId,snapshot'
++          || body.requestId !== inspectionResultMatch[1]) return send(res, 400, { error: 'invalid_inspection_result' });
++        const session = liveSession();
++        if (!session || body.sessionId !== session.id) return send(res, 409, { error: 'session_replaced_or_expired' });
++        const job = inspections.get(inspectionResultMatch[1]);
++        if (!job) return send(res, 404, { error: 'inspection_not_found' });
++        if (job.sessionId !== session.id || !equalSecret(body.resultToken, job.resultToken)) return send(res, 403, { error: 'invalid_inspection_capability' });
++        if (job.status === 'pending' && now() > job.expiresAt) job.status = 'expired';
++        if (job.status === 'completed') return send(res, 200, { ok: true, accepted: true, duplicate: true });
++        if (job.status !== 'pending') return send(res, 409, { error: 'inspection_already_resolved', status: job.status });
++        if (!validInspectionSnapshot(body.snapshot, job.requestId)) return send(res, 400, { error: 'invalid_inspection_snapshot' });
++        job.status = 'completed';
++        job.snapshot = body.snapshot;
++        job.resultExpiresAt = now() + INSPECTION_RESULT_TTL_MS;
++        return send(res, 200, { ok: true, accepted: true, duplicate: false });
++      }
+       const decisionMatch = path.match(/^\/v1\/operations\/([0-9a-f-]{36})\/decision$/i);
+       if (req.method === 'POST' && decisionMatch) {
+         const body = await readJson(req);
+@@ -330,4 +456,4 @@ if (require.main === module) {
+   process.on('SIGINT', () => server.close(() => process.exit(0)));
+   process.on('SIGTERM', () => server.close(() => process.exit(0)));
+ }
+-module.exports = { createServer, HEARTBEAT_TTL_MS, COMMAND_TTL_MS, ALLOWED_SERVICES, validOverview, validName, validRequestId };
+\ No newline at end of file
++module.exports = { createServer, HEARTBEAT_TTL_MS, COMMAND_TTL_MS, INSPECTION_TTL_MS, MAX_INSPECTION_OBJECTS, MAX_SNAPSHOT_BYTES, MAX_INSPECTION_HTTP_BYTES, ALLOWED_SERVICES, validOverview, validName, validRequestId, validInspectionSnapshot };
+\ No newline at end of file
+diff --git a/studio-plugin/ArenaRobloxConnector.plugin.lua b/studio-plugin/ArenaRobloxConnector.plugin.lua
+index 211f3f7a0c308817c9e72038cd0602d235c2ce1b..b9075d5f84e5483b7a10d47d6d8ff707b1a21e39 100644
+--- a/studio-plugin/ArenaRobloxConnector.plugin.lua
++++ b/studio-plugin/ArenaRobloxConnector.plugin.lua
+@@ -6,6 +6,10 @@ local RunService = game:GetService("RunService")
+ local BASE_URL = "http://127.0.0.1:4317"
+ local TOKEN_SETTING = "ConnectorToken"
+ local HEARTBEAT_INTERVAL = 5
++local INSPECTION_MAX_DEPTH = 2
++local INSPECTION_MAX_OBJECTS = 32
++local INSPECTION_MAX_SNAPSHOT_BYTES = 14 * 1024
++local INSPECTION_MAX_RESULT_BODY_BYTES = 16 * 1024
+ local ALLOWED_SERVICES = {
+     "Workspace", "ReplicatedStorage", "ServerStorage", "ServerScriptService",
+     "StarterGui", "StarterPack", "StarterPlayer", "Lighting", "SoundService",
+@@ -120,6 +124,8 @@ local cycleBusy = false
+ local heartbeatLoopStarted = false
+ local currentRequest = nil
+ local actionBusy = false
++local inspectionBusy = false
++local activeInspectionId = nil
+ local function validOperationName(value)
+     return type(value) == "string"
+         and #value >= 1 and #value <= 40
+@@ -336,6 +342,128 @@ end)
+ rejectButton.Activated:Connect(function()
+     if currentRequest then decide(currentRequest, "reject") end
+ end)
++local function collectWorkspaceSnapshot(requestId)
++    local startedAt = os.clock()
++    local objects = {}
++    local queue = {{instance = workspace, id = "workspace", depth = 0}}
++    local queueIndex = 1
++    local truncated = false
++    local stopTraversal = false
++    while queueIndex <= #queue and not stopTraversal do
++        local parent = queue[queueIndex]
++        queueIndex += 1
++        local children = parent.instance:GetChildren()
++        for _, child in ipairs(children) do
++            if #objects >= INSPECTION_MAX_OBJECTS then
++                truncated = true
++                stopTraversal = true
++                break
++            end
++            -- Player characters are Workspace Models with a Humanoid; omit the whole Model
++            -- and never inspect its body parts or player-associated properties.
++            if parent.depth == 0 and child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
++                truncated = true
++                continue
++            end
++            local name = child.Name
++            if #name > 1024 or #child.ClassName > 64 then
++                truncated = true
++                stopTraversal = true
++                break
++            end
++            local depth = parent.depth + 1
++            local id = "o" .. tostring(#objects + 1)
++            local record = {
++                id = id,
++                parentId = parent.id,
++                depth = depth,
++                name = name,
++                className = child.ClassName,
++            }
++            if child:IsA("BasePart") then
++                local position = child.Position
++                local size = child.Size
++                local color = child.Color
++                record.properties = {
++                    position = {x = position.X, y = position.Y, z = position.Z},
++                    size = {x = size.X, y = size.Y, z = size.Z},
++                    color = {x = color.R * 255, y = color.G * 255, z = color.B * 255},
++                    material = child.Material.Name,
++                    anchored = child.Anchored,
++                    canCollide = child.CanCollide,
++                }
++            end
++            local reachedDepthLimit = depth >= INSPECTION_MAX_DEPTH
++            local candidateObjects = table.clone(objects)
++            table.insert(candidateObjects, record)
++            local candidate = {
++                requestId = requestId,
++                capturedAt = DateTime.now():ToIsoDate(),
++                objectCount = #candidateObjects,
++                truncated = truncated or reachedDepthLimit,
++                objects = candidateObjects,
++            }
++            if #HttpService:JSONEncode(candidate) > INSPECTION_MAX_SNAPSHOT_BYTES then
++                truncated = true
++                stopTraversal = true
++                break
++            end
++            table.insert(objects, record)
++            if reachedDepthLimit then
++                truncated = true -- Deeper descendants are intentionally not queried.
++            else
++                table.insert(queue, {instance = child, id = id, depth = depth})
++            end
++            if #objects % 8 == 0 then
++                task.wait()
++                if os.clock() - startedAt > 20 then error("Workspace inspection exceeded its time budget.") end
++            end
++        end
++    end
++    if queueIndex <= #queue then truncated = true end
++    local snapshot = {
++        requestId = requestId,
++        capturedAt = DateTime.now():ToIsoDate(),
++        objectCount = #objects,
++        truncated = truncated,
++        objects = objects,
++    }
++    if #HttpService:JSONEncode(snapshot) > INSPECTION_MAX_SNAPSHOT_BYTES then
++        error("Workspace snapshot exceeded the serialized result limit.")
++    end
++    return snapshot
++end
++local function submitInspectionResult(job, token, expectedSession)
++    local snapshot = collectWorkspaceSnapshot(job.requestId)
++    local body = {
++        requestId = job.requestId,
++        sessionId = expectedSession,
++        resultToken = job.resultToken,
++        snapshot = snapshot,
++    }
++    local encoded = HttpService:JSONEncode(body)
++    if #encoded > INSPECTION_MAX_RESULT_BODY_BYTES then error("Inspection result transport body exceeded its limit.") end
++    local response = request("POST", "/v1/inspections/" .. job.requestId .. "/result", token, body)
++    return decodeResponse(response, 200)
++end
++local function processInspection(job, token, expectedSession)
++    if inspectionBusy or actionBusy then return end
++    inspectionBusy = true
++    activeInspectionId = job.requestId
++    task.spawn(function()
++        local ok, errorMessage = pcall(function() submitInspectionResult(job, token, expectedSession) end)
++        if not ok then
++            setStatus("Read-only Workspace inspection failed: " .. tostring(errorMessage), Color3.fromRGB(255, 190, 100))
++        else
++            setStatus("Read-only Workspace snapshot delivered to the extension.", Color3.fromRGB(130, 230, 150))
++        end
++        inspectionBusy = false
++        activeInspectionId = nil
++    end)
++end
++local function validUuid(value)
++    return type(value) == "string" and #value == 36 and string.match(value, "^[0-9a-fA-F%-]+$") ~= nil
++end
+ local function refreshCycle()
+     if cycleBusy then return end
+     local token = tokenBox.Text
+@@ -394,6 +522,16 @@ local function refreshCycle()
+             elseif not actionBusy and currentRequest == nil then
+                 setApproval(nil)
+             end
++            local inspection = heartbeat.pendingInspection
++            if inspection ~= nil then
++                if not validUuid(inspection.requestId) or inspection.sessionId ~= currentSession
++                    or type(inspection.resultToken) ~= "string" or #inspection.resultToken < 32 then
++                    error("Connector returned an invalid read-only inspection request.")
++                end
++                if not actionBusy and (not inspectionBusy or activeInspectionId ~= inspection.requestId) then
++                    processInspection(inspection, token, currentSession)
++                end
++            end
+             local overviewResponse = request("GET", "/v1/project/overview", token)
+             local overview = decodeResponse(overviewResponse, 200)
+             if not validateOverview(overview, currentSession) then
+diff --git a/tests/inspection-schema.test.js b/tests/inspection-schema.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..2695860e26fe58948748e62ce51165223b3c1843
+--- /dev/null
++++ b/tests/inspection-schema.test.js
+@@ -0,0 +1,95 @@
++'use strict';
++const { test } = require('node:test');
++const assert = require('node:assert/strict');
++const Inspection = require('../extension/inspection-schema.js');
++
++const requestId = 'b1aaf39d-6ed0-4cab-9d4f-85ee4dd58106';
++function validSnapshot() {
++  return {
++    requestId,
++    capturedAt: '2026-10-26T12:00:00.000Z',
++    objectCount: 2,
++    truncated: true,
++    objects: [
++      { id: 'o1', parentId: 'workspace', depth: 1, name: 'Platforms', className: 'Folder' },
++      { id: 'o2', parentId: 'o1', depth: 2, name: 'Spawn', className: 'Part', properties: {
++        position: { x: 0, y: 5, z: 0 }, size: { x: 12, y: 1, z: 12 }, color: { x: 80, y: 160, z: 220 },
++        material: 'SmoothPlastic', anchored: true, canCollide: true,
++      } },
++    ],
++  };
++}
++
++test('inspection schema accepts bounded hierarchy and the BasePart property allowlist', () => {
++  assert.equal(Inspection.validateSnapshot(validSnapshot(), requestId), true);
++});
++
++test('inspection schema rejects mismatched IDs, malformed parents/depths, extra fields, and property types', () => {
++  const badSnapshots = [];
++  badSnapshots.push({ ...validSnapshot(), extra: true });
++  badSnapshots.push({ ...validSnapshot(), requestId: 'c1aaf39d-6ed0-4cab-9d4f-85ee4dd58106' });
++  badSnapshots.push({ ...validSnapshot(), objectCount: 1 });
++  badSnapshots.push({ ...validSnapshot(), objects: [{ ...validSnapshot().objects[1], parentId: 'missing' }] });
++  badSnapshots.push({ ...validSnapshot(), objects: [{ ...validSnapshot().objects[0], depth: 3 }] });
++  badSnapshots.push({ ...validSnapshot(), truncated: false });
++  const withPropertiesOnFolder = validSnapshot();
++  withPropertiesOnFolder.objects[0].properties = { ...validSnapshot().objects[1].properties };
++  badSnapshots.push(withPropertiesOnFolder);
++  badSnapshots.push({ ...validSnapshot(), objects: [{ ...validSnapshot().objects[0], properties: {} }, validSnapshot().objects[1]] });
++  badSnapshots.push({ ...validSnapshot(), objects: [validSnapshot().objects[0], { ...validSnapshot().objects[1], properties: { ...validSnapshot().objects[1].properties, source: 'code' } }] });
++  badSnapshots.push({ ...validSnapshot(), objects: [validSnapshot().objects[0], { ...validSnapshot().objects[1], properties: { ...validSnapshot().objects[1].properties, anchored: 1 } }] });
++  for (const value of badSnapshots) assert.equal(Inspection.validateSnapshot(value, requestId), false);
++});
++
++test('inspection schema enforces object and serialized-byte caps', () => {
++  const tooMany = validSnapshot();
++  tooMany.objects = Array.from({ length: Inspection.MAX_OBJECTS + 1 }, (_, i) => ({
++    id: `o${i + 1}`, parentId: 'workspace', depth: 1, name: `Object${i + 1}`, className: 'Folder',
++  }));
++  tooMany.objectCount = tooMany.objects.length;
++  assert.equal(Inspection.validateSnapshot(tooMany, requestId), false);
++
++  const tooLarge = validSnapshot();
++  tooLarge.objects = Array.from({ length: Inspection.MAX_OBJECTS }, (_, i) => ({
++    id: `o${i + 1}`, parentId: 'workspace', depth: 1, name: 'x'.repeat(1024), className: 'Folder',
++  }));
++  tooLarge.objectCount = tooLarge.objects.length;
++  tooLarge.truncated = true;
++  assert.equal(Inspection.validateSnapshot(tooLarge, requestId), false);
++});
++
++test('inspection handoff builds a bounded, explicit unsent draft and preserves existing composer text', () => {
++  const snapshot = validSnapshot();
++  const draft = Inspection.appendSnapshotToDraft('Please inspect this project.  ', snapshot);
++  assert.ok(draft.startsWith('Please inspect this project.\n\n'));
++  assert.ok(draft.includes('Snapshot-local IDs'));
++  assert.ok(draft.includes(JSON.stringify(snapshot)));
++  assert.ok(new TextEncoder().encode(Inspection.formatSnapshot(snapshot)).byteLength <= Inspection.MAX_DRAFT_BYTES);
++  assert.equal(Inspection.appendSnapshotToDraft('', { ...snapshot, extra: true }), null);
++});
++
++test('Arena content script wires inspection to visible preview and an unsent draft, not an automatic send', () => {
++  const fs = require('node:fs');
++  const source = fs.readFileSync(require.resolve('../extension/content.js'), 'utf8');
++  assert.match(source, /inspectButton\.addEventListener\('click', requestInspection\)/);
++  assert.match(source, /type: 'request_inspection'/);
++  assert.match(source, /inspectionPreview\.textContent = formatted/);
++  assert.match(source, /INSPECTION\.appendSnapshotToDraft\(editor\.value, latestInspection\)/);
++  const draftHandler = source.slice(source.indexOf("draftInspectionButton.addEventListener('click'"), source.indexOf("draftButton.addEventListener('click'"));
++  assert.match(draftHandler, /setTextareaValue\(editor, draft\)/);
++  assert.doesNotMatch(draftHandler, /requestSubmit|\.submit\(/);
++});
++
++
++test('Studio collector source shows bounded BFS and excludes character-like Workspace models without Players service access', () => {
++  const fs = require('node:fs');
++  const source = fs.readFileSync(require.resolve('../studio-plugin/ArenaRobloxConnector.plugin.lua'), 'utf8');
++  const collector = source.slice(source.indexOf('local function collectWorkspaceSnapshot'), source.indexOf('local function submitInspectionResult'));
++  assert.match(collector, /GetChildren\(\)/);
++  assert.match(source, /INSPECTION_MAX_DEPTH = 2/);
++  assert.match(source, /INSPECTION_MAX_OBJECTS = 32/);
++  assert.match(collector, /INSPECTION_MAX_DEPTH/);
++  assert.match(collector, /INSPECTION_MAX_OBJECTS/);
++  assert.match(collector, /FindFirstChildOfClass\("Humanoid"\)/);
++  assert.doesNotMatch(collector, /GetDescendants|GetService\("Players"\)|\.Source|GetAttributes/);
++});
+diff --git a/tests/server.test.js b/tests/server.test.js
+index 146023610b8856d7225b512e354e488a3dbe44e3..a82717016f7e85c553045c1e145a744dd1f42331 100644
+--- a/tests/server.test.js
++++ b/tests/server.test.js
+@@ -1,7 +1,7 @@
+ 'use strict';
+ const { test } = require('node:test');
+ const assert = require('node:assert/strict');
+-const { createServer } = require('../server');
++const { createServer, validInspectionSnapshot, MAX_SNAPSHOT_BYTES, MAX_INSPECTION_HTTP_BYTES } = require('../server');
+ const TOKEN = 'a'.repeat(44);
+ const EXTENSION_TOKEN = 'b'.repeat(48);
+ const overview = {
+@@ -268,6 +268,110 @@ test('extension preflight is limited to chrome-extension origins', async () => w
+   assert.equal(bad.status, 403);
+ }));
+ 
++const inspectionSnapshot = requestId => ({
++  requestId,
++  capturedAt: '2026-10-26T12:00:00.000Z',
++  objectCount: 2,
++  truncated: true,
++  objects: [
++    { id: 'o1', parentId: 'workspace', depth: 1, name: 'Platforms', className: 'Folder' },
++    { id: 'o2', parentId: 'o1', depth: 2, name: 'Spawn', className: 'Part', properties: {
++      position: { x: 0, y: 5, z: 0 }, size: { x: 12, y: 1, z: 12 }, color: { x: 80, y: 160, z: 220 },
++      material: 'SmoothPlastic', anchored: true, canCollide: true,
++    } },
++  ],
++});
++
++test('inspection schema validates hierarchy, selected properties, truncation, and serialized bytes', () => {
++  const valid = inspectionSnapshot('b1aaf39d-6ed0-4cab-9d4f-85ee4dd58106');
++  assert.equal(validInspectionSnapshot(valid, valid.requestId), true);
++  assert.equal(validInspectionSnapshot({ ...valid, truncated: false }, valid.requestId), false);
++  const invalid = [
++    { ...valid, unexpected: true },
++    { ...valid, objectCount: 1 },
++    { ...valid, objects: [valid.objects[0], { ...valid.objects[1], parentId: 'missing' }] },
++    { ...valid, objects: [valid.objects[0], { ...valid.objects[1], depth: 3 }] },
++    { ...valid, objects: [valid.objects[0], { ...valid.objects[1], properties: { ...valid.objects[1].properties, scriptSource: 'x' } }] },
++    { ...valid, objects: [valid.objects[0], { ...valid.objects[1], properties: { ...valid.objects[1].properties, anchored: 1 } }] },
++    { ...valid, objects: [{ ...valid.objects[0], properties: { ...valid.objects[1].properties } }, valid.objects[1]] },
++  ];
++  for (const item of invalid) assert.equal(validInspectionSnapshot(item, valid.requestId), false);
++  const tooLarge = { ...valid, objects: Array.from({ length: 32 }, (_, i) => ({ id: `o${i + 1}`, parentId: 'workspace', depth: 1, name: 'x'.repeat(1024), className: 'Folder' })) };
++  tooLarge.objectCount = tooLarge.objects.length;
++  assert.ok(Buffer.byteLength(JSON.stringify(tooLarge)) > MAX_SNAPSHOT_BYTES);
++  assert.equal(validInspectionSnapshot(tooLarge, valid.requestId), false);
++  assert.ok(MAX_INSPECTION_HTTP_BYTES > MAX_SNAPSHOT_BYTES);
++});
++
++test('read-only inspection request uses extension auth, active Studio session, queue cap, and duplicate IDs', async () => withServer(async base => {
++  const requestId = 'c1aaf39d-6ed0-4cab-9d4f-85ee4dd58106';
++  const post = body => fetch(`${base}/v1/inspections`, { method: 'POST', ...extensionJsonRequest(body) });
++  assert.equal((await post({ requestId })).status, 503);
++  const sessionId = await register(base); await heartbeat(base, sessionId);
++  assert.equal((await fetch(`${base}/v1/inspections`, { method: 'POST', ...jsonRequest({ requestId }) })).status, 401);
++  assert.equal((await post({ requestId, extra: true })).status, 400);
++  const queued = await post({ requestId });
++  assert.equal(queued.status, 202);
++  const heartbeatResult = await (await heartbeat(base, sessionId)).json();
++  assert.equal(heartbeatResult.pendingInspection.requestId, requestId);
++  assert.equal(heartbeatResult.pendingInspection.sessionId, sessionId);
++  assert.ok(heartbeatResult.pendingInspection.resultToken);
++  assert.equal((await post({ requestId })).status, 409);
++  assert.equal((await post({ requestId: 'd1aaf39d-6ed0-4cab-9d4f-85ee4dd58106' })).status, 429);
++}));
++
++test('inspection result requires Studio credential, matching session/capability, and rejects replay mutation', async () => withServer(async base => {
++  const requestId = 'e1aaf39d-6ed0-4cab-9d4f-85ee4dd58106';
++  const sessionId = await register(base); await heartbeat(base, sessionId);
++  await fetch(`${base}/v1/inspections`, { method: 'POST', ...extensionJsonRequest({ requestId }) });
++  const job = (await (await heartbeat(base, sessionId)).json()).pendingInspection;
++  const snapshot = inspectionSnapshot(requestId);
++  const resultUrl = `${base}/v1/inspections/${requestId}/result`;
++  const body = { requestId, sessionId, resultToken: job.resultToken, snapshot };
++  assert.equal((await fetch(resultUrl, { method: 'POST', ...extensionJsonRequest(body) })).status, 401);
++  assert.equal((await fetch(resultUrl, { method: 'POST', ...jsonRequest({ ...body, sessionId: 'f1aaf39d-6ed0-4cab-9d4f-85ee4dd58106' }) })).status, 409);
++  assert.equal((await fetch(resultUrl, { method: 'POST', ...jsonRequest({ ...body, resultToken: 'wrong' }) })).status, 403);
++  const completed = await fetch(resultUrl, { method: 'POST', ...jsonRequest(body) });
++  assert.equal(completed.status, 200);
++  assert.deepEqual(await completed.json(), { ok: true, accepted: true, duplicate: false });
++  const fetched = await fetch(`${base}/v1/inspections/${requestId}`, { headers: extensionAuth() });
++  assert.equal(fetched.status, 200);
++  assert.deepEqual((await fetched.json()).inspection.snapshot, snapshot);
++  const replay = await fetch(resultUrl, { method: 'POST', ...jsonRequest(body) });
++  assert.deepEqual(await replay.json(), { ok: true, accepted: true, duplicate: true });
++  assert.equal((await fetch(`${base}/v1/inspections/${requestId}`, { headers: auth() })).status, 401);
++  await register(base);
++  assert.equal((await fetch(`${base}/v1/inspections/${requestId}`, { headers: extensionAuth() })).status, 409);
++}));
++
++test('inspection jobs and completed snapshots expire, and result bodies stay bounded', async () => {
++  let now = 1000;
++  await withServer(async base => {
++    const sessionId = await register(base); await heartbeat(base, sessionId);
++    const requestId = 'a2aaf39d-6ed0-4cab-9d4f-85ee4dd58106';
++    await fetch(`${base}/v1/inspections`, { method: 'POST', ...extensionJsonRequest({ requestId }) });
++    const job = (await (await heartbeat(base, sessionId)).json()).pendingInspection;
++    const url = `${base}/v1/inspections/${requestId}/result`;
++    const oversized = await fetch(url, { method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' }, body: 'x'.repeat(MAX_INSPECTION_HTTP_BYTES + 1) });
++    assert.equal(oversized.status, 413);
++    now += 101;
++    assert.equal((await (await fetch(`${base}/v1/inspections/${requestId}`, { headers: extensionAuth() })).json()).inspection.status, 'expired');
++    const late = await fetch(url, { method: 'POST', ...jsonRequest({ requestId, sessionId, resultToken: job.resultToken, snapshot: inspectionSnapshot(requestId) }) });
++    assert.equal(late.status, 409);
++  }, { now: () => now, sessionTtlMs: 120_000, inspectionTtlMs: 100 });
++
++  now = 2000;
++  await withServer(async base => {
++    const sessionId = await register(base); await heartbeat(base, sessionId);
++    const requestId = 'b2aaf39d-6ed0-4cab-9d4f-85ee4dd58106';
++    await fetch(`${base}/v1/inspections`, { method: 'POST', ...extensionJsonRequest({ requestId }) });
++    const job = (await (await heartbeat(base, sessionId)).json()).pendingInspection;
++    await fetch(`${base}/v1/inspections/${requestId}/result`, { method: 'POST', ...jsonRequest({ requestId, sessionId, resultToken: job.resultToken, snapshot: inspectionSnapshot(requestId) }) });
++    now += 60_001;
++    assert.equal((await fetch(`${base}/v1/inspections/${requestId}`, { headers: extensionAuth() })).status, 404);
++  }, { now: () => now, sessionTtlMs: 120_000 });
++});
++
+ test('unsupported operations and paths are not exposed', async () => withServer(async base => {
+   assert.equal((await fetch(`${base}/v1/execute`, { headers: auth() })).status, 404);
+   assert.equal((await fetch(`${base}/v1/session/register`, { method: 'DELETE', headers: auth() })).status, 404);

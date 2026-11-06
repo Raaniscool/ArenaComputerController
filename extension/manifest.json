@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Arena Roblox Connector",
+  "version": "0.2.0",
+  "description": "Forward one allowlisted Arena Direct command to your loopback connector for explicit Roblox Studio approval.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://arena.ai/text/*",
+    "https://arena.ai/c/*",
+    "http://127.0.0.1:4317/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Arena Roblox Connector"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://arena.ai/text/*", "https://arena.ai/c/*"],
+      "js": ["command-parser.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

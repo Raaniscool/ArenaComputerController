@@ -1,0 +1,20 @@
+Safe create_model transfer patch
+Base: d611e3cdc7e89a4da0f2b1452717f4498dbaa6a0 plus Phase 6A transfer patch from 2bd3d23923a1c41ccae16bb909e16326c1b90586.
+Patch SHA-256: 70f990aa51f27ab7bd4e2f35736e4cda52e38d2dbd5013fd0c434a3f5befdd44
+
+Before applying, verify these baseline hashes match the Windows working files. These are SHA-256 values for the exact Phase 6A source tree this patch targets. Any mismatch means STOP and inspect/merge manually.
+0af3d74f118116d4cd1b064f9ed46d92a9caac6bbe53c5edfb215dafaffa68da  /tmp/create-model-patch.p7in1k/README.md
+6d6e879f2e135bddce3be44cc70f10ce8cdbaadaab5dddcd4dd15dd6c310faa2  /tmp/create-model-patch.p7in1k/docs/architecture.md
+80ca6413210a3ed000e4c70f9489a205ed9806fe5e578f1f4d2ba02acbf16224  /tmp/create-model-patch.p7in1k/docs/development.md
+28778341bd89e36b8f4f307d645b97d7936d07e92306d6aafcad5fef26ebd99b  /tmp/create-model-patch.p7in1k/docs/security.md
+64d61e7882186f988d803f566eaf867f1a8e4e2c1059daa3d4d5740379d6c826  /tmp/create-model-patch.p7in1k/docs/research.md
+9e3bc049c007bf5a99366aace10ccf6c1d6c3deb151dfb3305d8230b628d33ca  /tmp/create-model-patch.p7in1k/extension/command-parser.js
+9ce1077a29524e44c892ec8df28a6147c2467ab9e4f16486bbb46324973696b3  /tmp/create-model-patch.p7in1k/extension/content.js
+7dcbd4a288730ae39607e6b801749c3216513d34580a9209ab96c2d45dab2330  /tmp/create-model-patch.p7in1k/extension/popup.html
+a0ce11b804263b3657b5e556dab55d5b4c4105e4d4da2f1194d6a8474c0e2097  /tmp/create-model-patch.p7in1k/server/index.js
+8925982df73995bc02ce1f9c7ec22e82b85030574c896f7bc5e519adf24b50d6  /tmp/create-model-patch.p7in1k/studio-plugin/ArenaRobloxConnector.plugin.lua
+2b156d580031b5a1e045c5a02f51e86980df78802983134d23aa9aedd2c27061  /tmp/create-model-patch.p7in1k/tests/extension-parser.test.js
+a944b55a677522ab1910cf6e1491c0698f772114cea9d4d5e711fea819151e3a  /tmp/create-model-patch.p7in1k/tests/server.test.js
+NEW tests/create-model-plugin.test.js
+
+Patch scope: create_model parser/content/server/plugin and tests, plus supported-operation/setup documentation. Existing Phase 6A inspection implementation is retained in the target files; its standalone schema, worker, manifest, and inspection tests are unchanged. Do not apply unless hashes match and git apply --check succeeds.
