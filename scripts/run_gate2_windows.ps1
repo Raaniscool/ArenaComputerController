@@ -2,7 +2,8 @@ param(
     [switch]$Configure,
     [switch]$Pair,
     [switch]$Status,
-    [switch]$Unpair
+    [switch]$Unpair,
+    [switch]$LocalTest
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,12 +18,14 @@ if ($Configure) { $SelectedCount++ }
 if ($Pair) { $SelectedCount++ }
 if ($Status) { $SelectedCount++ }
 if ($Unpair) { $SelectedCount++ }
+if ($LocalTest) { $SelectedCount++ }
 if ($SelectedCount -gt 1) {
-    throw "Choose at most one of -Configure, -Pair, -Status, or -Unpair."
+    throw "Choose at most one of -Configure, -Pair, -Status, -Unpair, or -LocalTest."
 }
 
 $Command = "run"
-if ($Configure) { $Command = "configure" }
+if ($LocalTest) { $Command = "local-test" }
+elseif ($Configure) { $Command = "configure" }
 elseif ($Pair) { $Command = "pair" }
 elseif ($Status) { $Command = "status" }
 elseif ($Unpair) { $Command = "unpair" }

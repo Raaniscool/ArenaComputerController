@@ -31,4 +31,5 @@ Write-Host "Checking the companion command surface..."
 if ($LASTEXITCODE -ne 0) { throw "Gate 2 command check failed." }
 
 Write-Host "Setup complete. No cloud resource or Supabase setting was changed."
-Write-Host "Next: run .\scripts\run_gate2_windows.ps1 -Configure, then -Pair after the authorized test branch migration is applied."
+Write-Host "For local-only window and screenshot verification, run .\scripts\run_gate2_windows.ps1 -LocalTest."
+Write-Host "The separate Supabase configure/pair workflow is not needed for this local test."

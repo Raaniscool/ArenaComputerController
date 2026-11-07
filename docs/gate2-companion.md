@@ -44,19 +44,25 @@ Use a `sb_publishable_*` key in the `apikey` header. New publishable keys are no
 - `src/arena_computer_controller/gate2/`: local config/DPAPI, protocol validation, fixed Supabase RPC client, Tk test window, fail-closed screenshot wrapper, companion poller, and CLI.
 - `supabase/migrations/20261106000100_gate2_windows_companion.sql`: test-only schema, token-hash helpers, bounded tables, and four RPCs. **Not applied.**
 - `supabase/tests/gate2_companion.test.sql`: pgTAP checks for direct table denial, function grants, session binding, and one-time claiming. **Not run against PostgreSQL.**
-- `scripts/setup_gate2_windows.ps1` and `scripts/run_gate2_windows.ps1`: minimal user-side setup and configure/pair/status/run/unpair commands.
+- `scripts/setup_gate2_windows.ps1` and `scripts/run_gate2_windows.ps1`: user-side setup, local-only verification, and the separate configure/pair/status/run/unpair workflow.
 
-## Setup when a Windows session is available
+## Windows setup and local-only verification
 
-The sandbox cannot access `C:\Users\Raani\Documents\ArenaComputerController`. The Windows owner must sync this branch into that checkout and run the scripts in an interactive Windows session. Do not copy or paste the program source by hand.
+Sync this branch into the Windows checkout and use an interactive PowerShell session. Do not copy or paste the program source by hand.
 
 ```powershell
 .\scripts\setup_gate2_windows.ps1
-.\scripts\run_gate2_windows.ps1 -Configure
-.\scripts\run_gate2_windows.ps1 -Pair
 ```
 
-`-Configure` prompts for the project URL and publishable (or legacy anon) key and saves them under `%LOCALAPPDATA%\ArenaComputerController\gate2\config.json`. `-Pair` generates a fresh token, DPAPI-protects it locally, and prints a session ID, token hash, and short bootstrap SQL. **The raw token is never shown.** The hash is not an authentication secret; use the printed SQL only in the authorized disposable branch after its migration is applied. Do not apply it to `main`.
+For the local-only window and screenshot check, run:
+
+```powershell
+.\scripts\run_gate2_windows.ps1 -LocalTest
+```
+
+This command does not resolve or read the config path, load DPAPI pairing material, construct a Supabase client, or start the polling companion. It opens the existing fixed 500×440 randomized marker window, waits briefly for it to render, captures only the verified window crop, validates the PNG, and saves it under a unique name in the Windows temporary directory. It prints the local path and dimensions, then leaves the window open so the fixed palette buttons can be tested. A safety or PNG validation failure closes the window and exits nonzero; no desktop-wide fallback is used.
+
+The separate Supabase workflow remains opt-in. `-Configure` prompts for the project URL and publishable (or legacy anon) key and saves them under `%LOCALAPPDATA%\ArenaComputerController\gate2\config.json`. `-Pair` generates a fresh token, DPAPI-protects it locally, and prints a session ID, token hash, and short bootstrap SQL. **The raw token is never shown.** The hash is not an authentication secret; use the printed SQL only in the authorized disposable branch after its migration is applied. Do not apply it to `main`.
 
 After the branch has the local migration and the pairing row, launch the test:
 
@@ -82,7 +88,7 @@ Run the printed revocation SQL through the SQL connector on the disposable branc
 
 ## Screenshot safety
 
-Before creating Tk, the CLI requires Windows per-monitor-v2 DPI awareness so Win32 window bounds and MSS screen pixels use the same coordinate space; if that cannot be enabled, launch fails closed. `WindowsWindowCapture` starts from the Tk root HWND and passes its exact bounds to `SystemDesktopBackend.capture_screenshot(region=...)`. It deliberately avoids `SystemDesktopBackend.get_state()` and the `window_id=...` capture path: that general-purpose lookup enumerates unrelated window titles and process names, outside this test's privacy scope. The region path is a visible-desktop crop; its MSS-first `ImageGrab` fallback also receives the exact bounding box and is never a full-desktop fallback. The wrapper verifies only its own process/window title/bounds, checks it is visible, topmost, and not minimized, and checks overlapping visible windows above it using HWNDs and rectangles without reading their titles. It repeats the target/occlusion checks after the crop and discards the image if the window moved or became obscured. Dimensions must match the fixed 500×440 window exactly. If the region capture fails, the window is clipped, or any check fails, the companion refuses to upload. Capture and Win32 Z-order checks are not atomic, so there is a small residual race if another topmost overlay appears and disappears between checks; use a clean interactive Windows session and do not use this design if that residual is unacceptable.
+Before creating Tk, the CLI requires Windows per-monitor-v2 DPI awareness so Win32 window bounds and MSS screen pixels use the same coordinate space; if that cannot be enabled, launch fails closed. `WindowsWindowCapture` starts from the Tk root HWND and passes its exact bounds to `SystemDesktopBackend.capture_screenshot(region=...)`. It deliberately avoids `SystemDesktopBackend.get_state()` and the `window_id=...` capture path: that general-purpose lookup enumerates unrelated window titles and process names, outside this test's privacy scope. The region path is a visible-desktop crop; its MSS-first `ImageGrab` fallback also receives the exact bounding box and is never a full-desktop fallback. The wrapper verifies only its own process/window title/bounds, checks it is visible, topmost, and not minimized, and checks overlapping visible windows above it using HWNDs and rectangles without reading their titles. It repeats the target/occlusion checks after the crop and discards the image if the window moved or became obscured. Dimensions must match the fixed 500×440 window exactly. If the region capture fails, the window is clipped, or any check fails, local mode refuses to save the PNG and the companion refuses to upload. Capture and Win32 Z-order checks are not atomic, so there is a small residual race if another topmost overlay appears and disappears between checks; use a clean interactive Windows session and do not use this design if that residual is unacceptable.
 
 No initial or resulting marker color is written as text to logs, file names, or result metadata. The actual screenshot pixels are the visual evidence. The UI exposes the set of possible color buttons, but not the current marker state.
 

@@ -22,6 +22,7 @@ from .credential_store import (
 )
 from .supabase_rpc import SupabaseRpcClient, SupabaseRpcError
 from .window import MarkerTestWindow
+from .local_test import LocalTestError, run_local_test
 
 
 def _config_path(argument: str | None) -> Path:
@@ -149,12 +150,18 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("status", help="Check the current paired test session without revealing credentials.")
     subparsers.add_parser("run", help="Open the isolated test window and start the polling companion.")
     subparsers.add_parser("unpair", help="Erase the local token and print SQL to revoke its test session.")
+    subparsers.add_parser(
+        "local-test",
+        help="Open the local marker window and save one scoped PNG without credentials or Supabase.",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "local-test":
+            return run_local_test()
         path = _config_path(args.config)
         if args.command == "configure":
             return _configure(path)
@@ -167,7 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "unpair":
             return _unpair(path)
         raise ConfigError("Unknown Gate 2 command.")
-    except (ConfigError, SupabaseRpcError) as exc:
+    except (ConfigError, SupabaseRpcError, LocalTestError) as exc:
         print(f"Gate 2: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
