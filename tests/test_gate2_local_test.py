@@ -101,19 +101,27 @@ class Gate2LocalTestTests(unittest.TestCase):
             events = []
             window = FakeWindow(root, events)
             capture = FakeCapture(events=events)
+            capture_options = []
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 result = run_local_test(
                     output_directory=Path(directory),
                     root_factory=lambda: root,
                     window_factory=lambda value: window,
-                    capture_factory=lambda *, target_handle: self._capture_for(target_handle, capture),
+                    capture_factory=lambda **options: (
+                        capture_options.append(options)
+                        or self._capture_for(options["target_handle"], capture)
+                    ),
                     dpi_setup=lambda: None,
                     is_windows=True,
                     capture_delay_ms=10,
                 )
             files = list(Path(directory).glob("*.png"))
             self.assertEqual(result, 0)
+            self.assertEqual(
+                capture_options,
+                [{"target_handle": FakeWindow.native_handle, "reject_overlapping_windows": False}],
+            )
             self.assertEqual(capture.calls, 1)
             self.assertEqual(root.after_delays, [10, 100])
             self.assertEqual(root.mainloop_calls, 1)

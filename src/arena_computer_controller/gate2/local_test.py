@@ -100,7 +100,10 @@ def run_local_test(
 
     try:
         window = (window_factory or MarkerTestWindow)(root)
-        capture = (capture_factory or WindowsWindowCapture)(target_handle=window.native_handle)
+        capture = (capture_factory or WindowsWindowCapture)(
+            target_handle=window.native_handle,
+            reject_overlapping_windows=False,
+        )
     except Exception:
         _destroy_root(root)
         raise LocalTestError("The local test-window capture target could not be initialized safely.") from None

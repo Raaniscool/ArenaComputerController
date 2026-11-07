@@ -4,11 +4,16 @@ import os
 import struct
 import unittest
 import zlib
+from unittest.mock import call, patch
 
 from arena_computer_controller.gate2.capture import (
     CaptureSafetyError,
     WindowsWindowCapture,
-    _validate_topmost_and_unobscured,
+    _validate_topmost_and_overlaps,
+    _validate_window_handle,
+    _validate_window_process,
+    _validate_window_title,
+    _validate_window_visibility,
     rects_intersect,
 )
 from arena_computer_controller.gate2.protocol import MAX_SCREENSHOT_BYTES
@@ -72,6 +77,49 @@ class Gate2CaptureTests(unittest.TestCase):
         self.assertEqual((result.width, result.height), (TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT))
         self.assertEqual(backend.calls, [("png", None, expected_bounds)])
         self.assertLessEqual(len(result.data), MAX_SCREENSHOT_BYTES)
+
+    def test_local_overlap_opt_out_is_used_for_pre_and_post_capture_checks(self):
+        backend = FakeBackend()
+        capture = WindowsWindowCapture(
+            backend,
+            target_handle=0x1234,
+            platform_check=lambda: True,
+            window_info_provider=lambda handle, pid, title: (handle, self.bounds()),
+            reject_overlapping_windows=False,
+        )
+        expected_check = call(
+            0x1234,
+            os.getpid(),
+            self.bounds(),
+            reject_overlapping_windows=False,
+        )
+        with patch(
+            "arena_computer_controller.gate2.capture._win32_window_is_safe",
+            return_value=True,
+        ) as safety_check:
+            capture.capture_png()
+        self.assertEqual(safety_check.call_args_list, [expected_check, expected_check])
+
+    def test_default_capture_keeps_overlap_rejection_enabled(self):
+        backend = FakeBackend()
+        capture = WindowsWindowCapture(
+            backend,
+            target_handle=0x1234,
+            platform_check=lambda: True,
+            window_info_provider=lambda handle, pid, title: (handle, self.bounds()),
+        )
+        expected_check = call(
+            0x1234,
+            os.getpid(),
+            self.bounds(),
+            reject_overlapping_windows=True,
+        )
+        with patch(
+            "arena_computer_controller.gate2.capture._win32_window_is_safe",
+            return_value=True,
+        ) as safety_check:
+            capture.capture_png()
+        self.assertEqual(safety_check.call_args_list, [expected_check, expected_check])
 
     def test_refuses_occlusion_without_calling_screenshot_backend(self):
         backend = FakeBackend()
@@ -152,15 +200,50 @@ class Gate2CaptureTests(unittest.TestCase):
         capture.capture_png()
         self.assertEqual(inspected, [(0x1234, os.getpid(), TEST_WINDOW_TITLE)] * 2)
 
-    def test_topmost_style_is_required_and_failure_is_distinguished(self):
+    def test_topmost_style_is_required_with_or_without_overlap_rejection(self):
         with self.assertRaisesRegex(CaptureSafetyError, "did not confirm.*topmost"):
-            _validate_topmost_and_unobscured(0, self.bounds(), [])
-        _validate_topmost_and_unobscured(0x00000008, self.bounds(), [])
+            _validate_topmost_and_overlaps(0, self.bounds(), [])
+        with self.assertRaisesRegex(CaptureSafetyError, "did not confirm.*topmost"):
+            _validate_topmost_and_overlaps(
+                0,
+                self.bounds(),
+                [],
+                reject_overlapping_windows=False,
+            )
+        _validate_topmost_and_overlaps(0x00000008, self.bounds(), [])
 
-    def test_visible_overlap_still_fails_even_when_test_window_is_topmost(self):
+    def test_default_capture_policy_still_rejects_a_visible_overlap(self):
         overlapping = {"x": 45, "y": 55, "width": 80, "height": 60}
         with self.assertRaisesRegex(CaptureSafetyError, "visible window overlaps"):
-            _validate_topmost_and_unobscured(0x00000008, self.bounds(), [overlapping])
+            _validate_topmost_and_overlaps(0x00000008, self.bounds(), [overlapping])
+
+    def test_local_capture_policy_allows_multiple_overlapping_windows(self):
+        overlapping_windows = [
+            {"x": 45, "y": 55, "width": 80, "height": 60},
+            {"x": 100, "y": 120, "width": 300, "height": 200},
+        ]
+        _validate_topmost_and_overlaps(
+            0x00000008,
+            self.bounds(),
+            overlapping_windows,
+            reject_overlapping_windows=False,
+        )
+
+    def test_invalid_hwnd_process_title_and_visibility_still_fail_safely(self):
+        for invalid_handle in (0, -1, True):
+            with self.subTest(handle=invalid_handle), self.assertRaisesRegex(
+                CaptureSafetyError,
+                "could not be identified",
+            ):
+                _validate_window_handle(invalid_handle)
+        with self.assertRaisesRegex(CaptureSafetyError, "another process"):
+            _validate_window_process(1002, 1001)
+        with self.assertRaisesRegex(CaptureSafetyError, "title could not be verified"):
+            _validate_window_title("another-window", "Gate 2 test window")
+        with self.assertRaisesRegex(CaptureSafetyError, "hidden or minimized"):
+            _validate_window_visibility(False, False)
+        with self.assertRaisesRegex(CaptureSafetyError, "hidden or minimized"):
+            _validate_window_visibility(True, True)
 
     def test_rect_intersection(self):
         a = {"x": 0, "y": 0, "width": 10, "height": 10}

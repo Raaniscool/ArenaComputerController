@@ -59,10 +59,10 @@ class WindowsWindowCapture:
 
     The general backend's ``window_id`` path calls ``get_state()`` and
     enumerates window/process metadata. Gate 2 instead starts from the Tk root
-    HWND, validates only that HWND, checks for overlapping windows above it
-    without reading their titles, and reuses the backend's exact-region crop
-    path. The pixels remain a visible-desktop capture, not an isolated/offscreen
-    window capture.
+    HWND, validates only that HWND, and reuses the backend's exact-region crop
+    path. By default overlapping windows are rejected; the explicit local-test
+    mode may allow them while retaining target identity and topmost checks. The
+    pixels remain a visible-desktop capture, not an isolated/offscreen capture.
     """
 
     def __init__(
@@ -74,13 +74,27 @@ class WindowsWindowCapture:
         platform_check: Callable[[], bool] | None = None,
         window_info_provider: Callable[[int, int, str], tuple[int, dict[str, int]]] | None = None,
         occlusion_check: Callable[[int, int, dict[str, int]], bool] | None = None,
+        reject_overlapping_windows: bool = True,
     ) -> None:
+        if not isinstance(reject_overlapping_windows, bool):
+            raise ValueError("reject_overlapping_windows must be a boolean.")
         self.backend = backend or SystemDesktopBackend()
         self.target_handle = target_handle
         self.title = title
         self._platform_check = platform_check or (lambda: os.name == "nt")
         self._window_info_provider = window_info_provider or _win32_window_info
-        self._occlusion_check = occlusion_check or _win32_window_is_safe
+        self._occlusion_check = occlusion_check
+        self._reject_overlapping_windows = reject_overlapping_windows
+
+    def _is_target_window_safe(self, hwnd: int, process_id: int, bounds: dict[str, int]) -> bool:
+        if self._occlusion_check is not None:
+            return self._occlusion_check(hwnd, process_id, bounds)
+        return _win32_window_is_safe(
+            hwnd,
+            process_id,
+            bounds,
+            reject_overlapping_windows=self._reject_overlapping_windows,
+        )
 
     def capture_png(self) -> CapturedPng:
         if not self._platform_check():
@@ -95,8 +109,8 @@ class WindowsWindowCapture:
             normalized_bounds = _validate_bounds(bounds)
             if (normalized_bounds["width"], normalized_bounds["height"]) != (TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT):
                 raise CaptureSafetyError("The Gate 2 test window does not have its fixed capture dimensions.")
-            if not self._occlusion_check(handle, process_id, normalized_bounds):
-                raise CaptureSafetyError("The test window is obscured or is not topmost.")
+            if not self._is_target_window_safe(handle, process_id, normalized_bounds):
+                raise CaptureSafetyError("The test window is not topmost or could not be verified safely.")
 
             # Always pass an exact crop region. There is no full-desktop fallback.
             data, metadata = self.backend.capture_screenshot(image_format="png", region=normalized_bounds)
@@ -104,9 +118,9 @@ class WindowsWindowCapture:
             if (
                 post_handle != handle
                 or _validate_bounds(post_bounds) != normalized_bounds
-                or not self._occlusion_check(handle, process_id, normalized_bounds)
+                or not self._is_target_window_safe(handle, process_id, normalized_bounds)
             ):
-                raise CaptureSafetyError("The test window changed or became obscured during capture.")
+                raise CaptureSafetyError("The test window changed or could not be verified during capture.")
             region = metadata.get("region") if isinstance(metadata, dict) else None
             if not isinstance(region, dict) or any(
                 region.get(key) != normalized_bounds[key] for key in ("x", "y", "width", "height")
@@ -160,17 +174,41 @@ def rects_intersect(a: dict[str, int], b: dict[str, int]) -> bool:
     )
 
 
-def _validate_topmost_and_unobscured(
+def _validate_topmost_and_overlaps(
     extended_style: int,
     bounds: dict[str, int],
     visible_windows_above: list[dict[str, int]],
+    *,
+    reject_overlapping_windows: bool = True,
 ) -> None:
-    """Fail with a bounded reason if topmost or overlap checks do not pass."""
+    """Always require topmost; optionally reject intersecting visible windows."""
     if isinstance(extended_style, bool) or not isinstance(extended_style, int) or not extended_style & _WS_EX_TOPMOST:
         raise CaptureSafetyError("Windows did not confirm that the test window is topmost.")
+    if not reject_overlapping_windows:
+        return
     for other_bounds in visible_windows_above:
         if other_bounds["width"] > 0 and other_bounds["height"] > 0 and rects_intersect(bounds, other_bounds):
             raise CaptureSafetyError("A visible window overlaps the test window; close or move it before retrying.")
+
+
+def _validate_window_handle(handle: int) -> None:
+    if isinstance(handle, bool) or not isinstance(handle, int) or handle <= 0:
+        raise CaptureSafetyError("The Gate 2 test window could not be identified safely.")
+
+
+def _validate_window_visibility(is_visible: bool, is_minimized: bool) -> None:
+    if not is_visible or is_minimized:
+        raise CaptureSafetyError("The Gate 2 test window is hidden or minimized.")
+
+
+def _validate_window_process(actual_pid: int, expected_pid: int) -> None:
+    if actual_pid != expected_pid:
+        raise CaptureSafetyError("The Gate 2 test window belongs to another process.")
+
+
+def _validate_window_title(actual_title: str, expected_title: str) -> None:
+    if not isinstance(actual_title, str) or actual_title != expected_title:
+        raise CaptureSafetyError("The Gate 2 test window title could not be verified.")
 
 
 def _win32_window_info(target_handle: int, expected_pid: int, expected_title: str) -> tuple[int, dict[str, int]]:
@@ -199,20 +237,22 @@ def _win32_window_info(target_handle: int, expected_pid: int, expected_title: st
     requested = wintypes.HWND(target_handle)
     top_level = user32.GetAncestor(requested, 2)  # GA_ROOT; Tk may return a child HWND.
     handle = _as_hwnd_value(top_level)
-    if not handle or not user32.IsWindowVisible(top_level) or user32.IsIconic(top_level):
-        raise CaptureSafetyError("The Gate 2 test window is hidden or minimized.")
+    _validate_window_handle(handle)
+    _validate_window_visibility(bool(user32.IsWindowVisible(top_level)), bool(user32.IsIconic(top_level)))
 
     actual_pid = wintypes.DWORD()
-    if not user32.GetWindowThreadProcessId(top_level, ctypes.byref(actual_pid)) or int(actual_pid.value) != expected_pid:
-        raise CaptureSafetyError("The Gate 2 test window belongs to another process.")
+    if not user32.GetWindowThreadProcessId(top_level, ctypes.byref(actual_pid)):
+        raise CaptureSafetyError("The Gate 2 test window process could not be verified.")
+    _validate_window_process(int(actual_pid.value), expected_pid)
 
     title_length = int(user32.GetWindowTextLengthW(top_level))
     if title_length < 1 or title_length > 4096:
         raise CaptureSafetyError("The Gate 2 test window title could not be verified.")
     title_buffer = ctypes.create_unicode_buffer(title_length + 1)
     copied = int(user32.GetWindowTextW(top_level, title_buffer, len(title_buffer)))
-    if copied <= 0 or title_buffer.value != expected_title:
+    if copied <= 0:
         raise CaptureSafetyError("The Gate 2 test window title could not be verified.")
+    _validate_window_title(title_buffer.value, expected_title)
 
     rect = wintypes.RECT()
     if not user32.GetWindowRect(top_level, ctypes.byref(rect)):
@@ -226,8 +266,14 @@ def _win32_window_info(target_handle: int, expected_pid: int, expected_title: st
     return handle, bounds
 
 
-def _win32_window_is_safe(hwnd: int, expected_pid: int, bounds: dict[str, int]) -> bool:
-    """Require the target to be topmost and have no visible overlap above it."""
+def _win32_window_is_safe(
+    hwnd: int,
+    expected_pid: int,
+    bounds: dict[str, int],
+    *,
+    reject_overlapping_windows: bool = True,
+) -> bool:
+    """Require topmost; optionally reject overlaps from visible windows above."""
     if os.name != "nt":
         return False
     import ctypes
@@ -268,6 +314,17 @@ def _win32_window_is_safe(hwnd: int, expected_pid: int, bounds: dict[str, int]) 
     if current_bounds != bounds:
         raise CaptureSafetyError("The test window moved while its Z-order was being checked.")
 
+    if not reject_overlapping_windows:
+        # Local test mode deliberately permits visible windows to cover this crop.
+        # Keep the target's own topmost style check, but do not enumerate peers.
+        _validate_topmost_and_overlaps(
+            exstyle,
+            bounds,
+            [],
+            reject_overlapping_windows=False,
+        )
+        return True
+
     current = user32.GetWindow(target, 3)  # GW_HWNDPREV: windows above this one in Z order.
     visited: set[int] = set()
     visible_windows_above: list[dict[str, int]] = []
@@ -297,7 +354,12 @@ def _win32_window_is_safe(hwnd: int, expected_pid: int, bounds: dict[str, int]) 
     else:
         raise CaptureSafetyError("The test-window Z-order exceeded the verification limit.")
 
-    _validate_topmost_and_unobscured(exstyle, bounds, visible_windows_above)
+    _validate_topmost_and_overlaps(
+        exstyle,
+        bounds,
+        visible_windows_above,
+        reject_overlapping_windows=reject_overlapping_windows,
+    )
     return True
 
 
