@@ -11,6 +11,9 @@ from .protocol import MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH, MAX_SCREENSHOT_BYTES
 from .window import TEST_WINDOW_HEIGHT, TEST_WINDOW_TITLE, TEST_WINDOW_WIDTH
 
 
+_WS_EX_TOPMOST = 0x00000008
+
+
 class CaptureSafetyError(RuntimeError):
     """The target window cannot be proven safe to capture."""
 
@@ -157,6 +160,19 @@ def rects_intersect(a: dict[str, int], b: dict[str, int]) -> bool:
     )
 
 
+def _validate_topmost_and_unobscured(
+    extended_style: int,
+    bounds: dict[str, int],
+    visible_windows_above: list[dict[str, int]],
+) -> None:
+    """Fail with a bounded reason if topmost or overlap checks do not pass."""
+    if isinstance(extended_style, bool) or not isinstance(extended_style, int) or not extended_style & _WS_EX_TOPMOST:
+        raise CaptureSafetyError("Windows did not confirm that the test window is topmost.")
+    for other_bounds in visible_windows_above:
+        if other_bounds["width"] > 0 and other_bounds["height"] > 0 and rects_intersect(bounds, other_bounds):
+            raise CaptureSafetyError("A visible window overlaps the test window; close or move it before retrying.")
+
+
 def _win32_window_info(target_handle: int, expected_pid: int, expected_title: str) -> tuple[int, dict[str, int]]:
     """Read only the target window identity/bounds; never enumerate desktop titles."""
     if os.name != "nt":
@@ -234,17 +250,15 @@ def _win32_window_is_safe(hwnd: int, expected_pid: int, bounds: dict[str, int]) 
 
     target = wintypes.HWND(hwnd)
     if not user32.IsWindowVisible(target) or user32.IsIconic(target):
-        return False
+        raise CaptureSafetyError("The test window is not visible or is minimized.")
     target_pid = wintypes.DWORD()
     if not user32.GetWindowThreadProcessId(target, ctypes.byref(target_pid)) or int(target_pid.value) != expected_pid:
-        return False
+        raise CaptureSafetyError("The verified test-window handle changed ownership.")
     exstyle = int(get_window_long(target, -20))  # GWL_EXSTYLE
-    if not exstyle & 0x00000008:  # WS_EX_TOPMOST
-        return False
 
     rect = wintypes.RECT()
     if not user32.GetWindowRect(target, ctypes.byref(rect)):
-        return False
+        raise CaptureSafetyError("The test-window bounds could not be confirmed.")
     current_bounds = {
         "x": int(rect.left),
         "y": int(rect.top),
@@ -252,16 +266,17 @@ def _win32_window_is_safe(hwnd: int, expected_pid: int, bounds: dict[str, int]) 
         "height": int(rect.bottom - rect.top),
     }
     if current_bounds != bounds:
-        return False
+        raise CaptureSafetyError("The test window moved while its Z-order was being checked.")
 
     current = user32.GetWindow(target, 3)  # GW_HWNDPREV: windows above this one in Z order.
     visited: set[int] = set()
+    visible_windows_above: list[dict[str, int]] = []
     for _ in range(4096):
         current_value = _as_hwnd_value(current)
         if not current_value:
             break
         if current_value in visited:
-            return False
+            raise CaptureSafetyError("The test-window Z-order could not be verified safely.")
         visited.add(current_value)
         candidate = wintypes.HWND(current_value)
         current = user32.GetWindow(candidate, 3)
@@ -270,17 +285,19 @@ def _win32_window_is_safe(hwnd: int, expected_pid: int, bounds: dict[str, int]) 
         candidate_rect = wintypes.RECT()
         if not user32.GetWindowRect(candidate, ctypes.byref(candidate_rect)):
             # If a visible window cannot be inspected, fail closed.
-            return False
-        other_bounds = {
-            "x": int(candidate_rect.left),
-            "y": int(candidate_rect.top),
-            "width": int(candidate_rect.right - candidate_rect.left),
-            "height": int(candidate_rect.bottom - candidate_rect.top),
-        }
-        if other_bounds["width"] > 0 and other_bounds["height"] > 0 and rects_intersect(bounds, other_bounds):
-            return False
+            raise CaptureSafetyError("A visible window above the test window could not be checked safely.")
+        visible_windows_above.append(
+            {
+                "x": int(candidate_rect.left),
+                "y": int(candidate_rect.top),
+                "width": int(candidate_rect.right - candidate_rect.left),
+                "height": int(candidate_rect.bottom - candidate_rect.top),
+            }
+        )
     else:
-        return False
+        raise CaptureSafetyError("The test-window Z-order exceeded the verification limit.")
+
+    _validate_topmost_and_unobscured(exstyle, bounds, visible_windows_above)
     return True
 
 

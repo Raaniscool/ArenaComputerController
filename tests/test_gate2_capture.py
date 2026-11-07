@@ -5,7 +5,12 @@ import struct
 import unittest
 import zlib
 
-from arena_computer_controller.gate2.capture import CaptureSafetyError, WindowsWindowCapture, rects_intersect
+from arena_computer_controller.gate2.capture import (
+    CaptureSafetyError,
+    WindowsWindowCapture,
+    _validate_topmost_and_unobscured,
+    rects_intersect,
+)
 from arena_computer_controller.gate2.protocol import MAX_SCREENSHOT_BYTES
 from arena_computer_controller.gate2.window import TEST_WINDOW_HEIGHT, TEST_WINDOW_TITLE, TEST_WINDOW_WIDTH
 
@@ -75,6 +80,23 @@ class Gate2CaptureTests(unittest.TestCase):
             capture.capture_png()
         self.assertEqual(backend.calls, [])
 
+    def test_specific_win32_occlusion_reason_is_preserved_and_capture_is_not_attempted(self):
+        backend = FakeBackend()
+
+        def unsafe(*_args):
+            raise CaptureSafetyError("A visible window overlaps the test window.")
+
+        capture = WindowsWindowCapture(
+            backend,
+            target_handle=0x1234,
+            platform_check=lambda: True,
+            window_info_provider=lambda handle, pid, title: (handle, self.bounds()),
+            occlusion_check=unsafe,
+        )
+        with self.assertRaisesRegex(CaptureSafetyError, "visible window overlaps"):
+            capture.capture_png()
+        self.assertEqual(backend.calls, [])
+
     def test_refuses_wrong_target_dimensions_without_capture(self):
         backend = FakeBackend()
         bounds = self.bounds() | {"width": 499}
@@ -129,6 +151,16 @@ class Gate2CaptureTests(unittest.TestCase):
         )
         capture.capture_png()
         self.assertEqual(inspected, [(0x1234, os.getpid(), TEST_WINDOW_TITLE)] * 2)
+
+    def test_topmost_style_is_required_and_failure_is_distinguished(self):
+        with self.assertRaisesRegex(CaptureSafetyError, "did not confirm.*topmost"):
+            _validate_topmost_and_unobscured(0, self.bounds(), [])
+        _validate_topmost_and_unobscured(0x00000008, self.bounds(), [])
+
+    def test_visible_overlap_still_fails_even_when_test_window_is_topmost(self):
+        overlapping = {"x": 45, "y": 55, "width": 80, "height": 60}
+        with self.assertRaisesRegex(CaptureSafetyError, "visible window overlaps"):
+            _validate_topmost_and_unobscured(0x00000008, self.bounds(), [overlapping])
 
     def test_rect_intersection(self):
         a = {"x": 0, "y": 0, "width": 10, "height": 10}

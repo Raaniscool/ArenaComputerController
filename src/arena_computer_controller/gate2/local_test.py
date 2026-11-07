@@ -22,6 +22,9 @@ class LocalTestError(RuntimeError):
     """A local Gate 2 window or screenshot diagnostic failed safely."""
 
 
+_Z_ORDER_SETTLE_DELAY_MS = 100
+
+
 def _create_tk_root() -> Any:
     import tkinter as tk
 
@@ -132,8 +135,15 @@ def run_local_test(
         except Exception:
             fail("The local screenshot capture failed safely.")
 
+    def raise_then_capture() -> None:
+        try:
+            window.raise_for_capture()
+            root.after(_Z_ORDER_SETTLE_DELAY_MS, capture_once)
+        except Exception:
+            fail("The test window could not be raised safely before capture.")
+
     try:
-        root.after(capture_delay_ms, capture_once)
+        root.after(capture_delay_ms, raise_then_capture)
         root.mainloop()
     except KeyboardInterrupt:
         _destroy_root(root)

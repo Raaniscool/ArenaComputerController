@@ -96,6 +96,24 @@ class MarkerTestWindow:
         ).pack(pady=(4, 6))
         tk.Button(root, text="Close test window", command=self.close).pack(pady=(0, 8))
 
+    def raise_for_capture(self) -> None:
+        """Reassert visibility/topmost for this window after Tk maps it.
+
+        This only changes this test window's z-order; capture still performs
+        independent HWND, bounds, and occlusion checks before and after the crop.
+        """
+        if self._closing:
+            raise RuntimeError("The test window is closing.")
+        try:
+            self.root.deiconify()
+            self.root.attributes("-topmost", True)
+            self.root.lift()
+            self.root.update()
+            if self._closing:
+                raise RuntimeError
+        except Exception:
+            raise RuntimeError("The test window could not be raised safely for capture.") from None
+
     @property
     def native_handle(self) -> int:
         """Return only this Tk root's native handle for scoped capture checks."""

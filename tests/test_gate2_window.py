@@ -25,6 +25,7 @@ class FakeRoot:
         self.protocols = {}
         self.after_calls = []
         self.destroyed = False
+        self.events = []
 
     def title(self, value):
         self.title_value = value
@@ -43,6 +44,16 @@ class FakeRoot:
 
     def attributes(self, *args):
         self.attributes_calls.append(args)
+        self.events.append(("attributes", args))
+
+    def deiconify(self):
+        self.events.append(("deiconify",))
+
+    def lift(self):
+        self.events.append(("lift",))
+
+    def update(self):
+        self.events.append(("update",))
 
     def protocol(self, name, callback):
         self.protocols[name] = callback
@@ -105,6 +116,27 @@ class Gate2WindowTests(unittest.TestCase):
         self.assertEqual(window._status.value, "Test window ready")
         self.assertNotIn(window._marker_color, window._status.value)
         self.assertEqual(set(MARKER_COLORS), {"red", "green", "blue", "yellow", "purple"})
+
+    def test_raise_for_capture_reasserts_own_window_topmost_after_mapping(self):
+        import sys
+        from unittest.mock import patch
+
+        root = FakeRoot()
+        with patch.dict(sys.modules, {"tkinter": FakeTkModule()}):
+            window = MarkerTestWindow(root, color_picker=lambda colors: "green")
+        root.events.clear()
+
+        window.raise_for_capture()
+
+        self.assertEqual(
+            root.events,
+            [
+                ("deiconify",),
+                ("attributes", ("-topmost", True)),
+                ("lift",),
+                ("update",),
+            ],
+        )
 
     def test_only_fixed_palette_can_change_marker_and_close_is_clean(self):
         import sys

@@ -34,19 +34,20 @@ def make_png(width: int = 500, height: int = 440, rgb: tuple[int, int, int] = (5
 
 class FakeRoot:
     def __init__(self):
-        self.callback = None
-        self.after_delay = None
+        self.callbacks = []
+        self.after_delays = []
         self.destroyed = False
         self.mainloop_calls = 0
 
     def after(self, delay, callback):
-        self.after_delay = delay
-        self.callback = callback
+        self.after_delays.append(delay)
+        self.callbacks.append((delay, callback))
 
     def mainloop(self):
         self.mainloop_calls += 1
-        if self.callback is not None:
-            self.callback()
+        while self.callbacks and not self.destroyed:
+            _delay, callback = self.callbacks.pop(0)
+            callback()
 
     def destroy(self):
         self.destroyed = True
@@ -55,22 +56,28 @@ class FakeRoot:
 class FakeWindow:
     native_handle = 0x1234
 
-    def __init__(self, root):
+    def __init__(self, root, events=None):
         self.root = root
         self.statuses = []
+        self.events = events if events is not None else []
+
+    def raise_for_capture(self):
+        self.events.append("raised")
 
     def set_status(self, text):
         self.statuses.append(text)
 
 
 class FakeCapture:
-    def __init__(self, result=None, error=None):
+    def __init__(self, result=None, error=None, events=None):
         self.result = result or CapturedPng(make_png(), 500, 440)
         self.error = error
         self.calls = 0
+        self.events = events if events is not None else []
 
     def capture_png(self):
         self.calls += 1
+        self.events.append("captured")
         if self.error:
             raise self.error
         return self.result
@@ -91,8 +98,9 @@ class Gate2LocalTestTests(unittest.TestCase):
     def test_local_test_captures_once_reports_path_and_dimensions_and_leaves_window_open(self):
         with tempfile.TemporaryDirectory() as directory:
             root = FakeRoot()
-            window = FakeWindow(root)
-            capture = FakeCapture()
+            events = []
+            window = FakeWindow(root, events)
+            capture = FakeCapture(events=events)
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 result = run_local_test(
@@ -107,8 +115,9 @@ class Gate2LocalTestTests(unittest.TestCase):
             files = list(Path(directory).glob("*.png"))
             self.assertEqual(result, 0)
             self.assertEqual(capture.calls, 1)
-            self.assertEqual(root.after_delay, 10)
+            self.assertEqual(root.after_delays, [10, 100])
             self.assertEqual(root.mainloop_calls, 1)
+            self.assertEqual(events, ["raised", "captured"])
             self.assertFalse(root.destroyed, "the window stays open for local marker-button testing")
             self.assertEqual(window.statuses, ["Local PNG saved; no cloud connection"])
             self.assertEqual(len(files), 1)
